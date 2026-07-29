@@ -1347,7 +1347,7 @@ const btnGhost = () => ({
 });
 
 /* ---------- AI concierge ---------- */
-const CONCIERGE_CONTEXT = `You are the FFG Concierge — the AI assistant inside the Forbes Family Group member app.
+const CONCIERGE_CONTEXT = `You are the Connect Concierge — the AI assistant inside the Forbes Family Group member app.
 
 About Forbes Family Group (FFG): a UK organisation opening doors for people from underserved communities across three pillars — Capital, Community and Connect. 10,000+ people supported, 750K+ digital community, £1M+ raised for causes, 16 founders backed, 150+ events hosted. Motto: "From access to ownership."
 
@@ -1428,7 +1428,7 @@ const Concierge = ({ onClose }) => {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>FFG Concierge</span>
+              <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Connect Concierge</span>
               <Sparkles size={13} color={T.gold} />
             </div>
             <span style={{ fontSize: 11.5, color: T.community, fontFamily: "'Inter',sans-serif" }}>● Online — direct line to the group</span>
@@ -1592,7 +1592,7 @@ const Articles = ({ openArticle, openUser, member }) => {
 
   return (
     <div>
-      <SectionTitle eyebrow="IDEAS FROM THE COMMUNITY" title="Reads" />
+      <SectionTitle eyebrow="IDEAS FROM THE COMMUNITY" title="Library" />
 
       {/* dynamic AI article generator */}
       <div style={{
@@ -1938,7 +1938,7 @@ const SearchScreen = ({ onBack, openUser, openRoom, openEvent, openArticle }) =>
             ref={inputRef}
             value={q}
             onChange={e => setQ(e.target.value)}
-            placeholder="Search members, events, rooms, reads…"
+            placeholder="Search members, events, rooms, library…"
             style={{
               flex: 1, minWidth: 0, background: "none", border: "none", outline: "none",
               color: T.cream, fontSize: 14, fontFamily: "'Inter',sans-serif",
@@ -1955,7 +1955,7 @@ const SearchScreen = ({ onBack, openUser, openRoom, openEvent, openArticle }) =>
           <div style={{ padding: "48px 32px", textAlign: "center" }}>
             <Search size={30} color={T.dim} />
             <div style={{ marginTop: 14, fontSize: 14, color: T.dim, fontFamily: "'Inter',sans-serif", lineHeight: 1.55 }}>
-              Search across members, posts, events, rooms and reads.
+              Search across members, posts, events, rooms and library.
             </div>
           </div>
         )}
@@ -2014,7 +2014,7 @@ const SearchScreen = ({ onBack, openUser, openRoom, openEvent, openArticle }) =>
         )}
 
         {res && res.reads.length > 0 && (
-          <SearchGroup label="READS">
+          <SearchGroup label="LIBRARY">
             {res.reads.map(a => (
               <SearchRow
                 key={a.id}
@@ -2115,7 +2115,7 @@ const AIBriefing = ({ openConcierge, member }) => (
     <Sparkles size={17} color={T.gold} style={{ flexShrink: 0, marginTop: 2 }} />
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 11, letterSpacing: "0.14em", color: T.gold, fontWeight: 600, fontFamily: "'Inter',sans-serif", marginBottom: 5 }}>
-        {member?.name ? `${member.name.split(" ")[0].toUpperCase()}, YOUR AI BRIEFING` : "YOUR AI BRIEFING"}
+        {member?.name ? `${member.name.split(" ")[0].toUpperCase()}, YOUR CONNECT CONCIERGE` : "YOUR CONNECT CONCIERGE"}
       </div>
       <div style={{ fontSize: 13.5, lineHeight: 1.5, color: T.cream, fontFamily: "'Inter',sans-serif" }}>
         {member?.reasons?.includes("Find a mentor")
@@ -2822,7 +2822,7 @@ const TABS = [
   // Connect *pillar* on profiles, posts, events and rooms is unaffected.
   { id: "connect", label: "Meet", icon: Handshake },
   { id: "events", label: "Events", icon: Calendar },
-  { id: "reads", label: "Reads", icon: BookOpen },
+  { id: "reads", label: "Library", icon: BookOpen },
   // Capital is hidden for now at the client's request — to be revisited later.
   // The <Capital /> screen below is kept intact; restore this entry to bring it
   // back. Note this is only the nav tab: "Capital" as a *pillar* on member
