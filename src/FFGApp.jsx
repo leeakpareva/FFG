@@ -2091,7 +2091,7 @@ const Header = ({ onBell, onSearch }) => (
   }}>
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <img src={T.logo} alt="" style={{ width: 26, height: 26 }} />
-      <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 15, color: T.cream, letterSpacing: "0.04em" }}>FFG</span>
+      <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 15, color: T.cream, letterSpacing: "0.04em" }}>Connect</span>
     </div>
     <div style={{ display: "flex", gap: 18, color: T.cream, alignItems: "center" }}>
       <span onClick={onSearch} style={{ cursor: "pointer", display: "flex" }}>
