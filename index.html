@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover lets the app paint into the notch/home-indicator area -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+    <title>FFG — Forbes Family Group</title>
+    <meta name="description" content="The private members' floor for the Forbes Family Group." />
+    <meta name="theme-color" content="#000000" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FFG" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <style>
+      /* Make the browser behave like an app shell rather than a document. */
+      :root { -webkit-tap-highlight-color: transparent; }
+
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        height: 100dvh;   /* tracks the shrinking viewport as mobile chrome hides */
+      }
+
+      body {
+        background: #000;
+        overscroll-behavior: none;         /* no pull-to-refresh, no rubber band */
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+
+      /* The app scrolls internally; the page itself never does. */
+      body { overflow: hidden; }
+
+      /* Native apps don't let you drag-select the furniture — touch layouts only. */
+      @media (max-width: 767px) {
+        body { -webkit-user-select: none; user-select: none; }
+        ::-webkit-scrollbar { width: 0; height: 0; }
+      }
+
+      *:focus:not(:focus-visible) { outline: none; }
+      *:focus-visible { outline: 2px solid #C8A867; outline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

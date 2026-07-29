@@ -1,0 +1,15 @@
+{
+  "name": "FFG — Forbes Family Group",
+  "short_name": "FFG",
+  "description": "The private members' floor for the Forbes Family Group.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0A0A0D",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
