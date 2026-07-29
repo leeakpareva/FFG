@@ -3,7 +3,7 @@ import {
   Home, Users, Calendar, Banknote, User, Heart, MessageCircle, Share2,
   Sparkles, MapPin, ArrowUpRight, Bell, Search, Bookmark, ChevronRight,
   Zap, TrendingUp, Handshake, Plus, BadgeCheck, ChevronLeft, MoreHorizontal,
-  Grid3x3, Award, Mic, Trophy, Briefcase, Quote, Send, X, Bot,
+  Grid3x3, Award, Mic, Trophy, Briefcase, Quote, Send, X, Bot, Circle,
   Radio, Hand, MicOff, LogOut, Clock, CalendarCheck, ArrowRight, Check,
   Linkedin, Instagram, Globe, Twitter, Rocket, ImagePlus, BookOpen, Ticket, QrCode
 } from "lucide-react";
@@ -1852,6 +1852,199 @@ const MessagesScreen = ({ onBack, openChat, openUser }) => (
   </div>
 );
 
+/* ---------- search ---------- */
+/**
+ * One pass over everything the app already holds in memory: members, posts,
+ * events, rooms and reads. Matching is a plain case-insensitive substring over
+ * each record's own text plus, where it helps, the author's name — so
+ * searching "Kemi" finds her posts as well as her profile.
+ */
+const runSearch = q => {
+  const s = q.trim().toLowerCase();
+  if (!s) return null;
+  const hit = (...vals) => vals.filter(Boolean).join(" ").toLowerCase().includes(s);
+  return {
+    members: Object.values(USERS).filter(u => hit(u.name, u.handle, u.role, u.bio, u.pillar)),
+    posts: POSTS.filter(p => hit(p.text, p.pillar, USERS[p.uid]?.name)),
+    events: EVENTS.filter(e => hit(e.name, e.where, e.tag, e.about)),
+    rooms: ROOMS.filter(r => hit(r.title, r.tag, r.desc, r.when)),
+    reads: ARTICLES.filter(a => hit(a.title, a.excerpt, a.tag, USERS[a.author]?.name, ...(a.body || []))),
+  };
+};
+
+const SearchGroup = ({ label, children }) => (
+  <>
+    <div style={{
+      fontSize: 11, letterSpacing: "0.14em", color: T.gold, fontWeight: 700,
+      fontFamily: "'Inter',sans-serif", padding: "16px 18px 8px",
+    }}>{label}</div>
+    {children}
+  </>
+);
+
+const SearchRow = ({ icon, title, sub, onClick }) => (
+  <div onClick={onClick} style={{
+    display: "flex", alignItems: "center", gap: 13, padding: "11px 18px", cursor: "pointer",
+  }}>
+    {icon}
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{
+        fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14, color: T.cream,
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      }}>{title}</div>
+      {sub && (
+        <div style={{
+          fontSize: 12.5, color: T.dim, fontFamily: "'Inter',sans-serif", marginTop: 2,
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        }}>{sub}</div>
+      )}
+    </div>
+    <ChevronRight size={17} color={T.dim} style={{ flexShrink: 0 }} />
+  </div>
+);
+
+const SearchIconBadge = ({ children }) => (
+  <div style={{
+    width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+    background: T.card, border: `1px solid ${T.line}`,
+    display: "flex", alignItems: "center", justifyContent: "center",
+  }}>{children}</div>
+);
+
+const SearchScreen = ({ onBack, openUser, openRoom, openEvent, openArticle }) => {
+  const [q, setQ] = useState("");
+  const inputRef = React.useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const res = runSearch(q);
+  const total = res
+    ? res.members.length + res.posts.length + res.events.length + res.rooms.length + res.reads.length
+    : 0;
+
+  return (
+    <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 37, display: "flex", flexDirection: "column" }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10,
+        padding: "12px 14px", borderBottom: `1px solid ${T.line}`,
+        background: `${T.ink}F0`, backdropFilter: "blur(12px)",
+      }}>
+        <ChevronLeft size={24} color={T.cream} style={{ cursor: "pointer", flexShrink: 0 }} onClick={onBack} />
+        <div style={{
+          flex: 1, display: "flex", alignItems: "center", gap: 9,
+          background: T.card, border: `1px solid ${T.line}`, borderRadius: 999, padding: "9px 14px",
+        }}>
+          <Search size={17} color={T.dim} style={{ flexShrink: 0 }} />
+          <input
+            ref={inputRef}
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            placeholder="Search members, events, rooms, reads…"
+            style={{
+              flex: 1, minWidth: 0, background: "none", border: "none", outline: "none",
+              color: T.cream, fontSize: 14, fontFamily: "'Inter',sans-serif",
+            }}
+          />
+          {q && (
+            <X size={16} color={T.dim} style={{ cursor: "pointer", flexShrink: 0 }} onClick={() => { setQ(""); inputRef.current?.focus(); }} />
+          )}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 24 }}>
+        {!res && (
+          <div style={{ padding: "48px 32px", textAlign: "center" }}>
+            <Search size={30} color={T.dim} />
+            <div style={{ marginTop: 14, fontSize: 14, color: T.dim, fontFamily: "'Inter',sans-serif", lineHeight: 1.55 }}>
+              Search across members, posts, events, rooms and reads.
+            </div>
+          </div>
+        )}
+
+        {res && total === 0 && (
+          <div style={{ padding: "48px 32px", textAlign: "center" }}>
+            <div style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 18, color: T.cream }}>
+              No results for “{q.trim()}”
+            </div>
+            <div style={{ marginTop: 8, fontSize: 13.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+              Try a name, a pillar like Capital, or an event.
+            </div>
+          </div>
+        )}
+
+        {res && res.members.length > 0 && (
+          <SearchGroup label="MEMBERS">
+            {res.members.map(u => (
+              <SearchRow
+                key={u.id}
+                icon={<Avatar initials={u.id} size={40} />}
+                title={u.name}
+                sub={u.role}
+                onClick={() => openUser(u.id)}
+              />
+            ))}
+          </SearchGroup>
+        )}
+
+        {res && res.rooms.length > 0 && (
+          <SearchGroup label="ROOMS">
+            {res.rooms.map(r => (
+              <SearchRow
+                key={r.id}
+                icon={<SearchIconBadge><Radio size={18} color={r.live ? T.gold : T.dim} /></SearchIconBadge>}
+                title={r.title}
+                sub={r.live ? `● Live · ${r.listeners} listening` : r.when}
+                onClick={() => openRoom(r.id)}
+              />
+            ))}
+          </SearchGroup>
+        )}
+
+        {res && res.events.length > 0 && (
+          <SearchGroup label="EVENTS">
+            {res.events.map(e => (
+              <SearchRow
+                key={e.id}
+                icon={<SearchIconBadge><Calendar size={18} color={T.gold} /></SearchIconBadge>}
+                title={e.name}
+                sub={`${e.date} ${e.month} · ${e.where}`}
+                onClick={() => openEvent(e.id)}
+              />
+            ))}
+          </SearchGroup>
+        )}
+
+        {res && res.reads.length > 0 && (
+          <SearchGroup label="READS">
+            {res.reads.map(a => (
+              <SearchRow
+                key={a.id}
+                icon={<SearchIconBadge><BookOpen size={18} color={T.gold} /></SearchIconBadge>}
+                title={a.title}
+                sub={`${USERS[a.author]?.name || ""} · ${a.read}`}
+                onClick={() => openArticle(a)}
+              />
+            ))}
+          </SearchGroup>
+        )}
+
+        {res && res.posts.length > 0 && (
+          <SearchGroup label="POSTS">
+            {res.posts.map((p, i) => (
+              <SearchRow
+                key={i}
+                icon={<Avatar initials={p.uid} size={40} />}
+                title={USERS[p.uid]?.name || p.uid}
+                sub={p.text}
+                onClick={() => openUser(p.uid)}
+              />
+            ))}
+          </SearchGroup>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const NotificationsScreen = ({ onBack, openUser }) => (
   <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 35, display: "flex", flexDirection: "column" }}>
     {overlayTopBar("Notifications", onBack)}
@@ -1890,7 +2083,7 @@ const NotifRow = ({ n, openUser }) => {
 };
 
 /* ---------- shell chrome ---------- */
-const Header = ({ onBell }) => (
+const Header = ({ onBell, onSearch }) => (
   <div style={{
     display: "flex", alignItems: "center", justifyContent: "space-between",
     padding: "14px 18px 12px", position: "sticky", top: 0, zIndex: 10,
@@ -1901,7 +2094,9 @@ const Header = ({ onBell }) => (
       <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 15, color: T.cream, letterSpacing: "0.04em" }}>FFG</span>
     </div>
     <div style={{ display: "flex", gap: 18, color: T.cream, alignItems: "center" }}>
-      <Search size={21} strokeWidth={2} />
+      <span onClick={onSearch} style={{ cursor: "pointer", display: "flex" }}>
+        <Search size={21} strokeWidth={2} />
+      </span>
       <div style={{ position: "relative", cursor: "pointer" }} onClick={onBell}>
         <Bell size={21} strokeWidth={2} />
         <span style={{ position: "absolute", top: -1, right: -1, width: 8, height: 8, borderRadius: 4, background: T.gold }} />
@@ -2655,6 +2850,7 @@ export default function FFGApp() {
   const [showMessages, setShowMessages] = useState(false);
   const [chatWith, setChatWith] = useState(null);
   const [showNotifs, setShowNotifs] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [concierge, setConcierge] = useState(false);
   const openUser = uid => setViewUser(uid);
 
@@ -2664,7 +2860,7 @@ export default function FFGApp() {
   const showRail = vp.isDesktop && inApp;
   const resetViews = () => {
     setViewUser(null); setViewRoom(null); setViewEvent(null); setViewArticle(null);
-    setShowMessages(false); setChatWith(null); setShowNotifs(false);
+    setShowMessages(false); setChatWith(null); setShowNotifs(false); setShowSearch(false);
   };
 
   return (
@@ -2706,7 +2902,7 @@ export default function FFGApp() {
         {/* Sign-in sits after onboarding: splash → onboarding → Google → app. */}
         {entered && member && authLoaded && !isSignedIn && <SignInGate T={T} member={member} />}
 
-        {tab !== "profile" && <Header onBell={() => setShowNotifs(true)} />}
+        {tab !== "profile" && <Header onBell={() => setShowNotifs(true)} onSearch={() => setShowSearch(true)} />}
         <div className="ffg-scroll" style={{ flex: 1, overflowY: "auto", overscrollBehavior: "contain" }}>
           {tab === "feed" && <Feed openUser={openUser} openConcierge={() => setConcierge(true)} openRoom={id => setViewRoom(id)} member={member} />}
           {tab === "rooms" && <Rooms openRoom={id => setViewRoom(id)} openUser={openUser} />}
@@ -2725,6 +2921,17 @@ export default function FFGApp() {
         {showMessages && <MessagesScreen onBack={() => setShowMessages(false)} openChat={uid => setChatWith(uid)} openUser={openUser} />}
         {chatWith && <ChatView uid={chatWith} onBack={() => setChatWith(null)} openUser={openUser} />}
         {showNotifs && <NotificationsScreen onBack={() => setShowNotifs(false)} openUser={openUser} />}
+
+        {/* search — closes as it hands off, so results open on a clean stack */}
+        {showSearch && (
+          <SearchScreen
+            onBack={() => setShowSearch(false)}
+            openUser={uid => { setShowSearch(false); setViewUser(uid); }}
+            openRoom={id => { setShowSearch(false); setViewRoom(id); }}
+            openEvent={id => { setShowSearch(false); setViewEvent(id); }}
+            openArticle={a => { setShowSearch(false); setViewArticle(a); }}
+          />
+        )}
 
         {/* article reader overlay */}
         {viewArticle && <ArticleReader article={viewArticle} onBack={() => setViewArticle(null)} openUser={openUser} />}
@@ -2747,7 +2954,7 @@ export default function FFGApp() {
             display: "flex", alignItems: "center", justifyContent: "center",
             boxShadow: `0 6px 24px ${T.gold}50`,
           }}>
-            <Sparkles size={24} color={T.ink} strokeWidth={2.2} />
+            <Circle size={24} color={T.ink} strokeWidth={2.2} />
           </button>
         )}
         {concierge && <Concierge onClose={() => setConcierge(false)} />}
@@ -2763,7 +2970,7 @@ export default function FFGApp() {
           {TABS.map(t => {
             const Ico = t.icon; const on = tab === t.id;
             return (
-              <button key={t.id} onClick={() => { setTab(t.id); setViewUser(null); setViewRoom(null); setViewEvent(null); setViewArticle(null); setShowMessages(false); setChatWith(null); setShowNotifs(false); }} style={{
+              <button key={t.id} onClick={() => { setTab(t.id); resetViews(); }} style={{
                 background: "none", border: "none", cursor: "pointer",
                 display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "2px 6px",
                 color: on ? T.gold : T.dim, transition: "color 0.2s",
