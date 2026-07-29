@@ -2370,7 +2370,7 @@ const SectionTitle = ({ eyebrow, title }) => (
 
 const Connect = ({ openUser }) => (
   <div>
-    <SectionTitle eyebrow="CONNECT · AI MATCHING" title="Made for you this week" />
+    <SectionTitle eyebrow="MEET · AI MATCHING" title="Made for you this week" />
     <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 12 }}>
       {MATCHES.map(m => {
         const u = USERS[m.uid];
@@ -2818,7 +2818,9 @@ const Capital = () => (
 const TABS = [
   { id: "feed", label: "Home", icon: Home },
   { id: "rooms", label: "Rooms", icon: Radio },
-  { id: "connect", label: "Connect", icon: Handshake },
+  // Labelled "Meet" at the client's request. The id stays `connect` so the
+  // Connect *pillar* on profiles, posts, events and rooms is unaffected.
+  { id: "connect", label: "Meet", icon: Handshake },
   { id: "events", label: "Events", icon: Calendar },
   { id: "reads", label: "Reads", icon: BookOpen },
   // Capital is hidden for now at the client's request — to be revisited later.
