@@ -8,6 +8,7 @@ import {
   Linkedin, Instagram, Globe, Twitter, Rocket, ImagePlus, BookOpen, Ticket, QrCode
 } from "lucide-react";
 import { useAuth, useClerk } from "@clerk/clerk-react";
+import { createApi, validateImage, ACCEPTED_IMAGE_TYPES } from "./api.js";
 import { useViewport } from "./useViewport.js";
 import SignInGate from "./SignInGate.jsx";
 import DesktopRail from "./DesktopRail.jsx";
@@ -1574,72 +1575,18 @@ const ArticleReader = ({ article, onBack, openUser }) => {
   );
 };
 
+/**
+ * Library.
+ *
+ * Read-only for members. Articles are editorial and are published by the
+ * FFG team through the admin API — members can no longer generate or write
+ * pieces into the Library. The API enforces this (admin-only POST); this
+ * screen simply has no compose surface.
+ */
 const Articles = ({ openArticle, openUser, member }) => {
-  const [aiArticle, setAiArticle] = useState(null);
-  const [generating, setGenerating] = useState(false);
-
-  const generate = async () => {
-    if (generating) return;
-    setGenerating(true);
-    try {
-      const interests = member?.interests?.slice(0, 3).join(", ") || "startups and community";
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: `You write for the Forbes Family Group member app — a UK community moving underserved communities "from access to ownership" across Capital, Community and Connect. Write a short, punchy article (3 paragraphs, ~60 words each) personalised for a member interested in: ${interests}. Practical, warm, premium tone — no fluff, no headings. Respond ONLY with JSON, no markdown fences: {"title": "...", "excerpt": "...", "body": ["para1", "para2", "para3"]}`,
-          }],
-        }),
-      });
-      const data = await response.json();
-      const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("").replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(text);
-      const art = { id: "ai-" + Date.now(), ai: true, tag: "Connect", author: null, read: "2 min", time: "Just now", image: null, ...parsed };
-      setAiArticle(art);
-      openArticle(art);
-    } catch (e) {
-      // graceful: do nothing beyond resetting state
-    }
-    setGenerating(false);
-  };
-
   return (
     <div>
       <SectionTitle eyebrow="IDEAS FROM THE COMMUNITY" title="Library" />
-
-      {/* dynamic AI article generator */}
-      <div style={{
-        margin: "0 18px 18px", borderRadius: 18, padding: "16px 17px",
-        background: `linear-gradient(130deg, ${T.gold}20, ${T.ink2} 70%)`, border: `1px solid ${T.gold}45`,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <AgentMark size={15} />
-          <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13.5, color: T.goldSoft }}>Today's read, written for you</span>
-        </div>
-        <p style={{ margin: "0 0 12px", fontSize: 12.5, lineHeight: 1.5, color: T.cream, fontFamily: "'Inter',sans-serif" }}>
-          FFG AI writes a fresh piece around your interests{member?.interests?.length ? ` — ${member.interests.slice(0, 2).join(" and ").toLowerCase()}` : ""} — every time you ask.
-        </p>
-        <button onClick={generate} disabled={generating} style={{
-          padding: "10px 18px", borderRadius: 999, border: "none", cursor: generating ? "default" : "pointer",
-          background: generating ? T.card : `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})`,
-          color: generating ? T.dim : T.ink, fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13,
-        }}>{generating ? "Writing…" : aiArticle ? "Write me another" : "Generate my article"}</button>
-        {aiArticle && !generating && (
-          <div onClick={() => openArticle(aiArticle)} style={{
-            marginTop: 12, padding: "11px 13px", borderRadius: 12, cursor: "pointer",
-            background: T.card, border: `1px solid ${T.line}`,
-            display: "flex", alignItems: "center", gap: 9,
-          }}>
-            <BookOpen size={15} color={T.gold} />
-            <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{aiArticle.title}</span>
-            <ChevronRight size={15} color={T.dim} />
-          </div>
-        )}
-      </div>
 
       {/* featured article */}
       <div onClick={() => openArticle(ARTICLES[0])} style={{
@@ -2256,9 +2203,10 @@ const Post = ({ p, openUser, member }) => {
 
       <p style={{ margin: "0 0 12px", fontFamily: "'Inter',sans-serif", fontSize: 14.5, lineHeight: 1.55, color: T.cream }}>{p.text}</p>
 
-      {p.image && (
+      {/* imageUrl is a member upload served from /media; image is a stock key */}
+      {(p.imageUrl || p.image) && (
         <div style={{ borderRadius: 16, overflow: "hidden", marginBottom: 12, border: `1px solid ${T.line}` }}>
-          <img src={EVENT_PICS[p.image] || p.image} alt="" style={{ width: "100%", display: "block" }} />
+          <img src={p.imageUrl || EVENT_PICS[p.image] || p.image} alt="" style={{ width: "100%", display: "block" }} />
         </div>
       )}
 
@@ -2293,7 +2241,49 @@ const Post = ({ p, openUser, member }) => {
 
 const Composer = ({ member, onPost, onClose }) => {
   const [text, setText] = useState("");
-  const [pic, setPic] = useState(null);
+  const [pic, setPic] = useState(null);          // stock image key
+  const [upload, setUpload] = useState(null);    // { url, id } once stored
+  const [preview, setPreview] = useState(null);  // local object URL, shown instantly
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const fileRef = React.useRef(null);
+  const { getToken } = useAuth();
+
+  // Revoke the object URL when it changes or the composer closes, or the
+  // browser holds the blob in memory for the life of the document.
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  const pickFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";                  // let the same file be re-picked after an error
+    if (!file) return;
+
+    const problem = validateImage(file);
+    if (problem) { setErr(problem); return; }
+
+    setErr(null);
+    setPic(null);                          // an upload replaces any stock pick
+    setPreview(URL.createObjectURL(file));
+    setBusy(true);
+    try {
+      const saved = await createApi(getToken).uploadImage(file, { kind: "post" });
+      setUpload(saved);
+    } catch (e2) {
+      setErr(e2.message || "Upload failed. Please try again.");
+      setPreview(p => { if (p) URL.revokeObjectURL(p); return null; });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearUpload = () => {
+    setPreview(p => { if (p) URL.revokeObjectURL(p); return null; });
+    setUpload(null);
+    setErr(null);
+  };
+
+  const canPost = (text.trim() || pic || upload) && !busy;
+
   return (
     <div style={{ position: "absolute", inset: 0, zIndex: 45, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
       <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "#00000090", backdropFilter: "blur(3px)" }} />
@@ -2316,9 +2306,62 @@ const Composer = ({ member, onPost, onClose }) => {
             }} />
         </div>
         <div style={{ fontSize: 11, letterSpacing: "0.12em", color: T.dim, fontWeight: 600, fontFamily: "'Inter',sans-serif", marginBottom: 9 }}>ADD A PHOTO</div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept={ACCEPTED_IMAGE_TYPES}
+          onChange={pickFile}
+          style={{ display: "none" }}
+        />
+
+        {preview ? (
+          <div style={{ position: "relative", marginBottom: 12 }}>
+            <img src={preview} alt="" style={{
+              width: "100%", maxHeight: 190, objectFit: "cover",
+              borderRadius: 14, border: `1px solid ${T.line}`,
+              opacity: busy ? 0.55 : 1, transition: "opacity 0.2s",
+            }} />
+            {busy && (
+              <div style={{
+                position: "absolute", inset: 0, display: "flex", alignItems: "center",
+                justifyContent: "center", fontSize: 12.5, fontWeight: 700, color: T.cream,
+                fontFamily: "'Inter',sans-serif",
+              }}>Uploading…</div>
+            )}
+            {!busy && (
+              <button onClick={clearUpload} aria-label="Remove photo" style={{
+                position: "absolute", top: 8, right: 8, width: 28, height: 28, borderRadius: 14,
+                border: "none", cursor: "pointer", background: "#00000099",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}><X size={16} color="#FFF" /></button>
+            )}
+          </div>
+        ) : (
+          <button onClick={() => fileRef.current?.click()} style={{
+            width: "100%", padding: "13px 0", marginBottom: 12, borderRadius: 14,
+            border: `1px dashed ${T.gold}80`, background: `${T.gold}0E`, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+            color: T.gold, fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13.5,
+          }}>
+            <ImagePlus size={17} />Upload from your device
+          </button>
+        )}
+
+        {err && (
+          <div style={{
+            marginBottom: 12, padding: "9px 12px", borderRadius: 10, fontSize: 12.5,
+            lineHeight: 1.45, fontFamily: "'Inter',sans-serif",
+            background: "rgba(200,60,60,0.10)", border: "1px solid rgba(200,60,60,0.35)", color: "#B4483F",
+          }}>{err}</div>
+        )}
+
+        <div style={{ fontSize: 11, color: T.dim, fontFamily: "'Inter',sans-serif", marginBottom: 9 }}>
+          or pick one of ours
+        </div>
         <div style={{ display: "flex", gap: 8, overflowX: "auto", marginBottom: 16 }}>
           {Object.keys(EVENT_PICS).map(k => (
-            <div key={k} onClick={() => setPic(p => p === k ? null : k)} style={{
+            <div key={k} onClick={() => { clearUpload(); setPic(p => p === k ? null : k); }} style={{
               flexShrink: 0, width: 82, height: 60, borderRadius: 10, overflow: "hidden", cursor: "pointer",
               border: pic === k ? `2.5px solid ${T.gold}` : `1px solid ${T.line}`,
               opacity: pic && pic !== k ? 0.45 : 1, transition: "all 0.15s",
@@ -2328,15 +2371,23 @@ const Composer = ({ member, onPost, onClose }) => {
           ))}
         </div>
         <button
-          disabled={!text.trim() && !pic}
-          onClick={() => { onPost({ me: true, time: "now", pillar: "Community", text: text.trim() || "📸", image: pic, likes: 0, comments: 0 }); onClose(); }}
+          disabled={!canPost}
+          onClick={() => {
+            onPost({
+              me: true, time: "now", pillar: "Community",
+              text: text.trim() || "📸",
+              image: pic, imageUrl: upload?.url || null, mediaId: upload?.id || null,
+              likes: 0, comments: 0,
+            });
+            onClose();
+          }}
           style={{
             width: "100%", padding: "15px 0", borderRadius: 999, border: "none",
-            cursor: (text.trim() || pic) ? "pointer" : "default",
-            background: (text.trim() || pic) ? `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})` : T.card,
-            color: (text.trim() || pic) ? T.ink : T.dim,
+            cursor: canPost ? "pointer" : "default",
+            background: canPost ? `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})` : T.card,
+            color: canPost ? T.ink : T.dim,
             fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14.5,
-          }}>Post to the feed</button>
+          }}>{busy ? "Uploading…" : "Post to the feed"}</button>
       </div>
     </div>
   );
