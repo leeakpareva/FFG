@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
 import {
   Home, Users, Calendar, Banknote, User, Heart, MessageCircle, Share2,
-  Sparkles, MapPin, ArrowUpRight, Bell, Search, Bookmark, ChevronRight,
+  MapPin, ArrowUpRight, Bell, Search, Bookmark, ChevronRight,
   Zap, TrendingUp, Handshake, Plus, BadgeCheck, ChevronLeft, MoreHorizontal,
-  Grid3x3, Award, Mic, Trophy, Briefcase, Quote, Send, X, Bot, Circle,
+  Grid3x3, Award, Mic, Trophy, Briefcase, Quote, Send, X, Bot,
   Radio, Hand, MicOff, LogOut, Clock, CalendarCheck, ArrowRight, Check,
   Linkedin, Instagram, Globe, Twitter, Rocket, ImagePlus, BookOpen, Ticket, QrCode
 } from "lucide-react";
@@ -456,6 +456,23 @@ const calcMatch = (user, member) => {
 };
 
 /* ---------- tiny UI atoms ---------- */
+/**
+ * The Connect Concierge mark: two interlocking circles.
+ *
+ * Deliberately not a sparkle/star — every AI product uses one. Two rings
+ * meeting reads as connection, which is the point of the product, and it
+ * stays legible down to 13px where a star turns to mush.
+ */
+const AgentMark = ({ size = 16, color, strokeWidth = 1.9, style }) => (
+  <svg
+    width={size} height={size} viewBox="0 0 24 24" fill="none"
+    style={{ flexShrink: 0, ...style }} aria-hidden="true"
+  >
+    <circle cx="9.1" cy="12" r="5.9" stroke={color || T.gold} strokeWidth={strokeWidth} />
+    <circle cx="14.9" cy="12" r="5.9" stroke={color || T.gold} strokeWidth={strokeWidth} />
+  </svg>
+);
+
 const Avatar = ({ initials, ring, size = 44, onClick }) => (
   <div onClick={onClick} style={{
     width: size, height: size, borderRadius: "50%", flexShrink: 0, overflow: "hidden",
@@ -1017,7 +1034,7 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat 
 
   const menuItems = user.me
     ? [
-        { icon: Sparkles, label: "Refresh AI briefing", fn: () => {} },
+        { icon: AgentMark, label: "Refresh AI briefing", fn: () => {} },
         { icon: Bookmark, label: "Saved posts", fn: () => {} },
         { icon: QrCode, label: "My QR code", fn: () => {} },
         { icon: Globe, label: "Copy profile link", fn: () => {} },
@@ -1174,7 +1191,7 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat 
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                  <Sparkles size={13} color={T.gold} />
+                  <AgentMark size={13} />
                   <span style={{ fontSize: 12, fontWeight: 700, color: T.goldSoft, fontFamily: "'Inter',sans-serif" }}>Why you two should connect</span>
                 </div>
                 <div style={{ fontSize: 12.5, lineHeight: 1.5, color: T.cream, fontFamily: "'Inter',sans-serif" }}>
@@ -1429,7 +1446,7 @@ const Concierge = ({ onClose }) => {
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Connect Concierge</span>
-              <Sparkles size={13} color={T.gold} />
+              <AgentMark size={13} />
             </div>
             <span style={{ fontSize: 11.5, color: T.community, fontFamily: "'Inter',sans-serif" }}>● Online — direct line to the group</span>
           </div>
@@ -1536,7 +1553,7 @@ const ArticleReader = ({ article, onBack, openUser }) => {
               display: "flex", alignItems: "center", gap: 8, marginBottom: 20,
               background: `${T.gold}14`, border: `1px solid ${T.gold}40`, borderRadius: 12, padding: "10px 13px",
             }}>
-              <Sparkles size={14} color={T.gold} />
+              <AgentMark size={14} />
               <span style={{ fontSize: 12, color: T.goldSoft, fontFamily: "'Inter',sans-serif", fontWeight: 600 }}>Written live by FFG AI, just for you</span>
             </div>
           )}
@@ -1600,7 +1617,7 @@ const Articles = ({ openArticle, openUser, member }) => {
         background: `linear-gradient(130deg, ${T.gold}20, ${T.ink2} 70%)`, border: `1px solid ${T.gold}45`,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-          <Sparkles size={15} color={T.gold} />
+          <AgentMark size={15} />
           <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13.5, color: T.goldSoft }}>Today's read, written for you</span>
         </div>
         <p style={{ margin: "0 0 12px", fontSize: 12.5, lineHeight: 1.5, color: T.cream, fontFamily: "'Inter',sans-serif" }}>
@@ -1722,7 +1739,7 @@ const NOTIFS = [
   { icon: "event", uid: "FF", text: "FFG Digital cohort applications open Monday", time: "2d", unread: false },
 ];
 
-const NOTIF_ICONS = { heart: Heart, match: Sparkles, follow: User, room: Radio, event: Calendar };
+const NOTIF_ICONS = { heart: Heart, match: AgentMark, follow: User, room: Radio, event: Calendar };
 const NOTIF_COLORS = { heart: "community", match: "gold", follow: "connect", room: "gold", event: "community" };
 
 const overlayTopBar = (title, onBack, right = null) => (
@@ -2112,7 +2129,7 @@ const AIBriefing = ({ openConcierge, member }) => (
     background: `linear-gradient(130deg, ${T.gold}1C, ${T.ink2} 65%)`,
     border: `1px solid ${T.gold}38`, display: "flex", gap: 12, alignItems: "flex-start",
   }}>
-    <Sparkles size={17} color={T.gold} style={{ flexShrink: 0, marginTop: 2 }} />
+    <AgentMark size={17} style={{ marginTop: 2 }} />
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 11, letterSpacing: "0.14em", color: T.gold, fontWeight: 600, fontFamily: "'Inter',sans-serif", marginBottom: 5 }}>
         {member?.name ? `${member.name.split(" ")[0].toUpperCase()}, YOUR CONNECT CONCIERGE` : "YOUR CONNECT CONCIERGE"}
@@ -2390,7 +2407,7 @@ const Connect = ({ openUser }) => (
             <div style={{
               marginTop: 12, display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: T.connect,
               fontFamily: "'Inter',sans-serif", background: `${T.connect}12`, padding: "8px 12px", borderRadius: 10,
-            }}><Sparkles size={14} />{m.why}</div>
+            }}><AgentMark size={14} color={T.connect} />{m.why}</div>
             <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
               <button style={{
                 flex: 1, padding: "11px 0", borderRadius: 999, border: "none", background: T.gold,
@@ -2956,7 +2973,7 @@ export default function FFGApp() {
             display: "flex", alignItems: "center", justifyContent: "center",
             boxShadow: `0 6px 24px ${T.gold}50`,
           }}>
-            <Circle size={24} color={T.ink} strokeWidth={2.2} />
+            <AgentMark size={26} color={T.ink} strokeWidth={2.2} />
           </button>
         )}
         {concierge && <Concierge onClose={() => setConcierge(false)} />}
