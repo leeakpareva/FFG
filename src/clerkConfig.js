@@ -15,3 +15,9 @@ export const CLERK_PUBLISHABLE_KEY =
   'pk_test_c2FjcmVkLW9zcHJleS01MC5jbGVyay5hY2NvdW50cy5kZXYk';
 
 export const SSO_CALLBACK_PATH = '/sso-callback';
+
+/**
+ * Where anyone without a matching membership lands. FFG is invite-only, so
+ * this stands in for a sign-up page rather than linking to one.
+ */
+export const NOT_A_MEMBER_PATH = '/not-a-member';

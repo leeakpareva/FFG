@@ -26,6 +26,11 @@ export default function SignInGate({ T, member }) {
         strategy: 'oauth_google',
         redirectUrl: `${origin}${SSO_CALLBACK_PATH}`,
         redirectUrlComplete: `${origin}/`,
+        // FFG is invite-only: members sign in, they never self-register.
+        // Without this, a Google account with no matching member is silently
+        // "transferred" to Clerk's hosted sign-up page — which is why members
+        // were landing on a Clerk-branded domain instead of staying in the app.
+        transferable: false,
       });
     } catch (e) {
       setError(
