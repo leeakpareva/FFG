@@ -1,0 +1,53 @@
+# Connect — Forbes Family Group
+#
+# Reproduces the running ASUS deployment. The Cloudflare tunnel
+# (navada-tunnel) already lives on the external `navada-edge` network and
+# reaches this app at http://ffg-connect:80, so nothing here needs a
+# published port for the public site — 8100 is exposed only for local
+# debugging on the host.
+#
+# Secrets come from a local .env (see .env.example). Never commit .env:
+# this repository is public.
+
+services:
+  ffg-connect:
+    build: .
+    image: ffg-connect:latest
+    container_name: ffg-connect
+    restart: always
+    ports:
+      - "8100:80"
+    networks:
+      - navada-edge
+      - default
+    depends_on:
+      - ffg-postgres
+
+  ffg-postgres:
+    image: pgvector/pgvector:pg17
+    container_name: ffg-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ffg}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      # Bound to loopback + Tailscale only. This must never be published
+      # to 0.0.0.0 — it holds member personal data.
+      - "5435:5432"
+    volumes:
+      - ffg-pgdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ffg}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ffg-pgdata:
+    external: true
+
+networks:
+  navada-edge:
+    external: true
