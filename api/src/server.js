@@ -6,6 +6,39 @@ import { articlesRouter } from './routes.articles.js';
 
 const app = express();
 app.disable('x-powered-by');
+
+/**
+ * CORS.
+ *
+ * The API is reachable publicly (through the Cloudflare tunnel) so the
+ * Vercel-hosted frontend can call it. Origins are an explicit allowlist from
+ * ALLOWED_ORIGINS — never a wildcard, and never reflected blindly.
+ *
+ * Auth travels as an Authorization header rather than a cookie, so
+ * Access-Control-Allow-Credentials stays off: a hostile page cannot ride a
+ * member's session just by being in their browser.
+ */
+const allowedOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS || '')
+    .split(',').map(s => s.trim()).filter(Boolean)
+);
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.has(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Authorization,Content-Type');
+    res.set('Access-Control-Max-Age', '86400');
+  }
+  if (req.method === 'OPTIONS') {
+    // Unknown origin gets no CORS headers, so the browser blocks it anyway.
+    return res.status(origin && allowedOrigins.has(origin) ? 204 : 403).end();
+  }
+  next();
+});
+
 app.use(express.json({ limit: '256kb' }));
 
 // Health is deliberately unauthenticated so the container healthcheck and

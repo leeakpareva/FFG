@@ -8,6 +8,20 @@
  * UI hiding a control is convenience, never the access control.
  */
 
+/**
+ * Where the API lives.
+ *
+ * Empty (the default) means same-origin, which is how the containerised
+ * build runs — nginx proxies /api to ffg-api. The Vercel build sets
+ * VITE_API_BASE to the public API host, because Vercel's functions and
+ * static origin cannot reach the private network the database sits on.
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+
+/** Absolute URL for an uploaded asset, wherever the API is hosted. */
+export const mediaUrl = (path) =>
+  !path ? null : path.startsWith('http') ? path : `${API_BASE}${path}`;
+
 const json = async (res) => {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -27,7 +41,7 @@ export function createApi(getToken) {
   return {
     /** Current member, including whether they may publish to the Library. */
     async me() {
-      return json(await fetch('/api/me', { headers: await auth() }));
+      return json(await fetch(`${API_BASE}/api/me`, { headers: await auth() }));
     },
 
     /**
@@ -40,7 +54,7 @@ export function createApi(getToken) {
       form.append('file', file);
       form.append('kind', kind);
       if (alt) form.append('alt_text', alt);
-      return json(await fetch('/api/media', {
+      return json(await fetch(`${API_BASE}/api/media`, {
         method: 'POST',
         headers: await auth(),   // no Content-Type: the browser sets the boundary
         body: form,
@@ -48,12 +62,12 @@ export function createApi(getToken) {
     },
 
     async listArticles() {
-      return json(await fetch('/api/articles', { headers: await auth() }));
+      return json(await fetch(`${API_BASE}/api/articles`, { headers: await auth() }));
     },
 
     /** Admin only — the server rejects non-admins with 403. */
     async publishArticle(article) {
-      return json(await fetch('/api/articles', {
+      return json(await fetch(`${API_BASE}/api/articles`, {
         method: 'POST',
         headers: { ...(await auth()), 'Content-Type': 'application/json' },
         body: JSON.stringify(article),
