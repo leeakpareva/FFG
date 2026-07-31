@@ -5,10 +5,11 @@ import {
   Zap, TrendingUp, Handshake, Plus, BadgeCheck, ChevronLeft, MoreHorizontal,
   Grid3x3, Award, Mic, Trophy, Briefcase, Quote, Send, X, Bot,
   Radio, Hand, MicOff, LogOut, Clock, CalendarCheck, ArrowRight, Check,
-  Linkedin, Instagram, Globe, Twitter, Rocket, ImagePlus, BookOpen, Ticket, QrCode
+  Linkedin, Instagram, Globe, Twitter, Rocket, ImagePlus, BookOpen, Ticket, QrCode,
+  Play, Pause, GraduationCap
 } from "lucide-react";
 import { useAuth, useClerk } from "@clerk/clerk-react";
-import { createApi, validateImage, ACCEPTED_IMAGE_TYPES } from "./api.js";
+import { createApi, validateImage, ACCEPTED_IMAGE_TYPES, mediaUrl } from "./api.js";
 import { useViewport } from "./useViewport.js";
 import SignInGate from "./SignInGate.jsx";
 import DesktopRail from "./DesktopRail.jsx";
@@ -666,6 +667,100 @@ const ARTICLES = [
       "Second: the support triage agent. It reads incoming messages, drafts replies for the easy 80%, and flags the hard 20% to you. One Root & Rise pilot handled its first hundred members without hiring support.",
       "Third: the meeting-to-action pipeline. Record, transcribe, extract commitments, push to your task list. Nothing falls through. At the AI for Founders Lab on the 12th we'll build all three live — bring a laptop.",
     ],
+  },
+];
+
+/**
+ * Watch — recordings of events that have already happened.
+ *
+ * Separate from EVENTS on purpose: an event is a thing you attend, a replay is
+ * a thing you watch afterwards. Keeping them apart means a past event can be
+ * published to the Library without dragging its RSVP state along with it.
+ */
+const REPLAYS = [
+  {
+    id: "r-summit", image: "p9", tag: "Capital", date: "12 Jun", duration: "58 min",
+    views: "1.2K", speakers: ["FF", "MJ", "KB"],
+    title: "Founders' Summit: the ownership keynote",
+    summary: "The full keynote on why FFG moved from access to equity, plus the audience Q&A that followed.",
+    chapters: [
+      ["00:00", "Why access alone wasn't enough"],
+      ["12:40", "How the stake actually works"],
+      ["31:05", "Audience questions"],
+    ],
+  },
+  {
+    id: "r-raise", image: "p4", tag: "Capital", date: "28 May", duration: "42 min",
+    views: "860", speakers: ["MJ", "SF"],
+    title: "How GoWave raised £240K in eleven weeks",
+    summary: "A teardown of the raise — the deck, the rejections, and the two intros that changed it.",
+    chapters: [
+      ["00:00", "The first fifteen noes"],
+      ["09:20", "Rewriting the deck"],
+      ["26:00", "Closing the round"],
+    ],
+  },
+  {
+    id: "r-brand", image: "p5", tag: "Connect", date: "14 May", duration: "36 min",
+    views: "740", speakers: ["NC", "LH"],
+    title: "Brand clinic: five member teardowns",
+    summary: "Naomi and Leila take apart five member brands live. Uncomfortable, useful, recorded.",
+    chapters: [
+      ["00:00", "What a brand actually is"],
+      ["06:15", "Teardowns"],
+      ["29:30", "Fixes you can do this week"],
+    ],
+  },
+  {
+    id: "r-wellbeing", image: "p6", tag: "Community", date: "02 May", duration: "51 min",
+    views: "610", speakers: ["SF", "DJ"],
+    title: "Founder wellbeing — the unglamorous bits",
+    summary: "The room where no one talks about metrics. Recorded with the panel's permission.",
+    chapters: [
+      ["00:00", "The part nobody posts about"],
+      ["18:00", "Boundaries that survive a raise"],
+      ["38:10", "Questions from the room"],
+    ],
+  },
+];
+
+/**
+ * Learn — live workshops. These run at a fixed time with a cohort, which is
+ * what separates them from a replay: seats are finite and the value is being
+ * in the room while it happens.
+ */
+const WORKSHOPS = [
+  {
+    id: "w-ai", image: "p8", tag: "Connect", host: "LA", live: true,
+    when: "Live now", level: "All levels", sessions: 1, duration: "90 min",
+    seats: { taken: 46, total: 60 },
+    title: "AI workflows for founders — build one live",
+    blurb: "Bring a real task from your business and leave with a working AI workflow that does it.",
+    outcomes: ["An investor-update writer in your voice", "A support triage agent", "Meeting notes that become tasks"],
+  },
+  {
+    id: "w-pitch", image: "p9", tag: "Capital", host: "MJ", live: false,
+    when: "Tue 5 Aug · 6:30 PM", level: "Intermediate", sessions: 2, duration: "2 hrs",
+    seats: { taken: 38, total: 40 },
+    title: "Pitch mechanics: the ten-slide raise",
+    blurb: "Two sessions. You arrive with a deck, you leave with a deck an angel will read to the end.",
+    outcomes: ["A narrative that holds for ten slides", "Numbers that survive a second question", "A follow-up sequence that works"],
+  },
+  {
+    id: "w-brand", image: "p5", tag: "Connect", host: "NC", live: false,
+    when: "Thu 14 Aug · 1:00 PM", level: "Beginner", sessions: 1, duration: "75 min",
+    seats: { taken: 21, total: 50 },
+    title: "Positioning in a sentence",
+    blurb: "If you can't say what you do in one sentence, your customers can't either. We fix that here.",
+    outcomes: ["One sentence that earns the second one", "A category you can actually own", "Language your whole team can repeat"],
+  },
+  {
+    id: "w-hiring", image: "p6", tag: "Community", host: "AO", live: false,
+    when: "Wed 27 Aug · 6:00 PM", level: "Intermediate", sessions: 3, duration: "1 hr",
+    seats: { taken: 12, total: 35 },
+    title: "Your first five hires, without a talent team",
+    blurb: "Three sessions on sourcing, interviewing and closing when nobody has heard of you yet.",
+    outcomes: ["A scorecard per role", "Interviews that predict something", "Offers people accept"],
   },
 ];
 
@@ -1575,22 +1670,399 @@ const ArticleReader = ({ article, onBack, openUser }) => {
   );
 };
 
+/* ---------- library: watch · learn · read ---------- */
+
 /**
- * Library.
- *
- * Read-only for members. Articles are editorial and are published by the
- * FFG team through the admin API — members can no longer generate or write
- * pieces into the Library. The API enforces this (admin-only POST); this
- * screen simply has no compose surface.
+ * How far the member got through each replay, 0–1, kept between visits so
+ * "Continue watching" survives a reload. Enrolments are stored the same way.
  */
-const Articles = ({ openArticle, openUser, member }) => {
+const readWatched = () => readJSON("ffg.watched") || {};
+const saveWatched = (id, pct) => writeJSON("ffg.watched", { ...readWatched(), [id]: pct });
+const readEnrolled = () => readJSON("ffg.enrolled") || [];
+
+const LIB_TABS = [
+  { id: "watch", label: "Watch", hint: "Past events", icon: Play },
+  { id: "learn", label: "Learn", hint: "Live workshops", icon: GraduationCap },
+  { id: "read", label: "Read", hint: "Articles", icon: BookOpen },
+];
+
+/** The shell every widget on this screen sits in. */
+const Widget = ({ label, action, onAction, pad = 15, children }) => (
+  <div style={{
+    background: T.card, border: `1px solid ${T.line}`, borderRadius: 20,
+    padding: pad, marginBottom: 12,
+  }}>
+    {(label || action) && (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={{ fontSize: 10.5, letterSpacing: "0.16em", fontWeight: 700, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{label}</span>
+        {action && (
+          <span onClick={onAction} style={{ fontSize: 12, fontWeight: 600, color: T.gold, cursor: "pointer", fontFamily: "'Inter',sans-serif" }}>{action}</span>
+        )}
+      </div>
+    )}
+    {children}
+  </div>
+);
+
+/** Three numbers side by side — the smallest widget on the screen. */
+const StatStrip = ({ items }) => (
+  <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+    {items.map(s => (
+      <div key={s.l} style={{
+        flex: 1, background: T.card, border: `1px solid ${T.line}`, borderRadius: 16,
+        padding: "13px 12px", textAlign: "center",
+      }}>
+        <div style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 21, color: s.c || T.cream, lineHeight: 1.1 }}>{s.v}</div>
+        <div style={{ fontSize: 10.5, color: T.dim, marginTop: 4, fontFamily: "'Inter',sans-serif", letterSpacing: "0.03em" }}>{s.l}</div>
+      </div>
+    ))}
+  </div>
+);
+
+/** A filled track — reused for watch progress and for seats remaining. */
+const Meter = ({ value, color, height = 5 }) => (
+  <div style={{ height, borderRadius: 999, background: T.line, overflow: "hidden" }}>
+    <div style={{
+      width: `${Math.max(0, Math.min(1, value)) * 100}%`, height: "100%",
+      borderRadius: 999, background: color || T.gold, transition: "width .3s ease",
+    }} />
+  </div>
+);
+
+const DurationChip = ({ children, icon: Ico }) => (
+  <span style={{
+    position: "absolute", right: 10, bottom: 10, display: "inline-flex", alignItems: "center", gap: 5,
+    background: "rgba(23,23,27,0.82)", color: "#FFF", fontSize: 11, fontWeight: 600,
+    padding: "4px 9px", borderRadius: 999, fontFamily: "'Inter',sans-serif",
+  }}>{Ico && <Ico size={11} />}{children}</span>
+);
+
+const PlayBadge = ({ size = 52 }) => (
+  <div style={{
+    position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+  }}>
+    <div style={{
+      width: size, height: size, borderRadius: "50%",
+      background: "rgba(255,255,255,0.92)", display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
+    }}>
+      <Play size={size * 0.4} color={T.cream} fill={T.cream} style={{ marginLeft: size * 0.05 }} />
+    </div>
+  </div>
+);
+
+/**
+ * Replay viewer.
+ *
+ * There is no media file behind these yet — the timeline is a stand-in so the
+ * surface can be reviewed. Position is real and is saved, so "Continue
+ * watching" behaves correctly once actual recordings are wired in.
+ */
+const ReplayViewer = ({ replay, onBack, openUser }) => {
+  const total = (parseInt(replay.duration, 10) || 45) * 60;
+  const [pos, setPos] = useState(Math.round((readWatched()[replay.id] || 0) * total));
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    if (!playing) return;
+    const t = setInterval(() => setPos(p => (p + 5 >= total ? total : p + 5)), 1000);
+    return () => clearInterval(t);
+  }, [playing, total]);
+
+  useEffect(() => { saveWatched(replay.id, pos / total); }, [pos, total, replay.id]);
+
+  const clock = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  const seek = stamp => {
+    const [m, s] = stamp.split(":").map(Number);
+    setPos(m * 60 + (s || 0));
+  };
+
   return (
-    <div>
-      <SectionTitle eyebrow="IDEAS FROM THE COMMUNITY" title="Library" />
+    <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 30, display: "flex", flexDirection: "column" }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "14px 14px 12px", borderBottom: `1px solid ${T.line}`,
+        background: `${T.ink}F0`, backdropFilter: "blur(12px)",
+      }}>
+        <ChevronLeft size={24} color={T.cream} style={{ cursor: "pointer" }} onClick={onBack} />
+        <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Replay</span>
+        <Bookmark size={20} color={T.cream} />
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        <div style={{ position: "relative", background: "#000" }}>
+          <img src={EVENT_PICS[replay.image]} alt="" style={{ width: "100%", display: "block", opacity: playing ? 0.55 : 0.85 }} />
+          <div onClick={() => setPlaying(p => !p)} style={{ position: "absolute", inset: 0, cursor: "pointer" }}>
+            {!playing && <PlayBadge size={62} />}
+          </div>
+          <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "10px 12px", background: "linear-gradient(transparent, rgba(0,0,0,0.65))" }}>
+            <Meter value={pos / total} color="#FFF" height={4} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 7 }}>
+              <span onClick={() => setPlaying(p => !p)} style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+                {playing ? <Pause size={15} color="#FFF" /> : <Play size={15} color="#FFF" fill="#FFF" />}
+                <span style={{ color: "#FFF", fontSize: 11.5, fontFamily: "'Inter',sans-serif", fontWeight: 600 }}>{clock(pos)} / {replay.duration}</span>
+              </span>
+              <span style={{ color: "rgba(255,255,255,0.8)", fontSize: 11, fontFamily: "'Inter',sans-serif" }}>{replay.views} views</span>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: "18px 20px 8px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 11 }}>
+            <PillarTag name={replay.tag} />
+            <span style={{ fontSize: 12, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Recorded {replay.date}</span>
+          </div>
+          <h1 style={{ margin: "0 0 12px", fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 23, lineHeight: 1.22, color: T.cream }}>{replay.title}</h1>
+          <p style={{ margin: "0 0 20px", fontSize: 14.5, lineHeight: 1.65, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{replay.summary}</p>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 22 }}>
+            {replay.speakers.map(uid => (
+              <div key={uid} onClick={() => openUser(uid)} style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+                <Avatar initials={uid} size={30} />
+                <span style={{ fontSize: 12, color: T.cream, fontWeight: 600, fontFamily: "'Inter',sans-serif" }}>{USERS[uid].name.split(" ")[0]}</span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 10.5, letterSpacing: "0.16em", fontWeight: 700, color: T.dim, marginBottom: 10, fontFamily: "'Inter',sans-serif" }}>CHAPTERS</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 26 }}>
+            {replay.chapters.map(([stamp, label]) => (
+              <div key={stamp} onClick={() => seek(stamp)} style={{
+                display: "flex", alignItems: "center", gap: 12, cursor: "pointer",
+                background: T.card, border: `1px solid ${T.line}`, borderRadius: 14, padding: "11px 13px",
+              }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: T.gold, fontFamily: "'Inter',sans-serif", minWidth: 42 }}>{stamp}</span>
+                <span style={{ flex: 1, fontSize: 13.5, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{label}</span>
+                <Play size={13} color={T.dim} />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ height: 80 }} />
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Watch — replays of events that have already run.
+ *
+ * `version` bumps every time the viewer closes, which is the cue to re-read
+ * progress from storage: this screen stays mounted behind the viewer, so it
+ * would otherwise show a stale bar.
+ */
+const WatchTab = ({ openReplay, version }) => {
+  const [watched, setWatched] = useState(readWatched);
+  useEffect(() => { setWatched(readWatched()); }, [version]);
+
+  const inProgress = REPLAYS.filter(r => (watched[r.id] || 0) > 0.02 && (watched[r.id] || 0) < 0.97);
+  const resume = inProgress[0];
+  const finished = REPLAYS.filter(r => (watched[r.id] || 0) >= 0.97).length;
+  const featured = REPLAYS[0];
+
+  return (
+    <div style={{ padding: "0 18px" }}>
+      <StatStrip items={[
+        { v: REPLAYS.length, l: "recordings" },
+        { v: inProgress.length, l: "in progress", c: T.gold },
+        { v: finished, l: "finished", c: T.community },
+      ]} />
+
+      {resume && (
+        <Widget label="CONTINUE WATCHING" action="Clear" onAction={() => { writeJSON("ffg.watched", {}); setWatched({}); }}>
+          <div onClick={() => openReplay(resume)} style={{ display: "flex", gap: 12, cursor: "pointer", alignItems: "center" }}>
+            <div style={{ position: "relative", width: 96, height: 62, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
+              <img src={EVENT_PICS[resume.image]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <PlayBadge size={26} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: T.cream, fontFamily: "'Inter',sans-serif", marginBottom: 7, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{resume.title}</div>
+              <Meter value={watched[resume.id]} />
+              <div style={{ fontSize: 11, color: T.dim, marginTop: 6, fontFamily: "'Inter',sans-serif" }}>{Math.round(watched[resume.id] * 100)}% · {resume.duration}</div>
+            </div>
+          </div>
+        </Widget>
+      )}
+
+      {/* featured replay */}
+      <div onClick={() => openReplay(featured)} style={{
+        borderRadius: 20, overflow: "hidden", cursor: "pointer", marginBottom: 12,
+        border: `1px solid ${T.line}`, background: T.card,
+      }}>
+        <div style={{ position: "relative" }}>
+          <img src={EVENT_PICS[featured.image]} alt="" style={{ width: "100%", display: "block" }} />
+          <PlayBadge />
+          <DurationChip icon={Clock}>{featured.duration}</DurationChip>
+        </div>
+        <div style={{ padding: "15px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <PillarTag name={featured.tag} />
+            <span style={{ fontSize: 11.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{featured.date} · {featured.views} views</span>
+          </div>
+          <div style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 19, lineHeight: 1.25, color: T.cream, marginBottom: 6 }}>{featured.title}</div>
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{featured.summary}</div>
+        </div>
+      </div>
+
+      {/* the rest, two up */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {REPLAYS.slice(1).map(r => (
+          <div key={r.id} onClick={() => openReplay(r)} style={{
+            background: T.card, border: `1px solid ${T.line}`, borderRadius: 16,
+            overflow: "hidden", cursor: "pointer",
+          }}>
+            <div style={{ position: "relative" }}>
+              <img src={EVENT_PICS[r.image]} alt="" style={{ width: "100%", height: 96, objectFit: "cover", display: "block" }} />
+              <PlayBadge size={34} />
+              <DurationChip>{r.duration}</DurationChip>
+            </div>
+            <div style={{ padding: "11px 12px 13px" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.35, color: T.cream, fontFamily: "'Inter',sans-serif", marginBottom: 6, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.title}</div>
+              <div style={{ fontSize: 11, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{r.date} · {r.views} views</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ height: 90 }} />
+    </div>
+  );
+};
+
+/** Learn — live workshops, with seats that actually run out. */
+const LearnTab = ({ openUser }) => {
+  const [enrolled, setEnrolled] = useState(readEnrolled);
+  useEffect(() => { writeJSON("ffg.enrolled", enrolled); }, [enrolled]);
+
+  const toggle = id => setEnrolled(e => (e.includes(id) ? e.filter(x => x !== id) : [...e, id]));
+  const live = WORKSHOPS.find(w => w.live);
+  const upcoming = WORKSHOPS.filter(w => !w.live);
+  // "90 min" and "2 hrs" both land in hours, multiplied by however many sessions.
+  const hoursOf = w => {
+    const n = parseInt(w.duration, 10) || 0;
+    return (w.duration.includes("min") ? n / 60 : n) * w.sessions;
+  };
+  const hours = WORKSHOPS.filter(w => enrolled.includes(w.id)).reduce((n, w) => n + hoursOf(w), 0);
+
+  return (
+    <div style={{ padding: "0 18px" }}>
+      <StatStrip items={[
+        { v: enrolled.length, l: "enrolled", c: T.gold },
+        { v: WORKSHOPS.length, l: "workshops" },
+        { v: `${hours.toFixed(1)}h`, l: "of teaching", c: T.connect },
+      ]} />
+
+      {live && (
+        <div style={{
+          background: `linear-gradient(135deg, ${T.gold}18, ${T.connect}14)`,
+          border: `1px solid ${T.gold}55`, borderRadius: 20, padding: 15, marginBottom: 12,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 11 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#D7263D", boxShadow: "0 0 0 4px rgba(215,38,61,0.18)" }} />
+            <span style={{ fontSize: 10.5, letterSpacing: "0.16em", fontWeight: 700, color: T.cream, fontFamily: "'Inter',sans-serif" }}>LIVE NOW</span>
+          </div>
+          <div style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 18, lineHeight: 1.25, color: T.cream, marginBottom: 6 }}>{live.title}</div>
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: T.dim, fontFamily: "'Inter',sans-serif", marginBottom: 13 }}>{live.blurb}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Avatar initials={live.host} size={32} onClick={() => openUser(live.host)} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{USERS[live.host].name}</div>
+              <div style={{ fontSize: 11, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{live.seats.taken} in the room · {live.duration}</div>
+            </div>
+            <button onClick={() => toggle(live.id)} style={{
+              border: "none", cursor: "pointer", borderRadius: 999, padding: "10px 18px",
+              background: `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})`, color: "#FFF",
+              fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13,
+            }}>{enrolled.includes(live.id) ? "Joined" : "Join"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* upcoming workshops */}
+      <div style={{ fontSize: 10.5, letterSpacing: "0.16em", fontWeight: 700, color: T.dim, margin: "6px 2px 10px", fontFamily: "'Inter',sans-serif" }}>UPCOMING</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {upcoming.map(w => {
+          const left = w.seats.total - w.seats.taken;
+          const isOn = enrolled.includes(w.id);
+          return (
+            <div key={w.id} style={{ background: T.card, border: `1px solid ${isOn ? `${T.gold}66` : T.line}`, borderRadius: 20, overflow: "hidden" }}>
+              <div style={{ display: "flex", gap: 13, padding: 13 }}>
+                <div style={{ width: 74, height: 74, borderRadius: 14, overflow: "hidden", flexShrink: 0 }}>
+                  <img src={EVENT_PICS[w.image]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
+                    <PillarTag name={w.tag} />
+                    <span style={{ fontSize: 10.5, color: T.dim, fontWeight: 600, fontFamily: "'Inter',sans-serif" }}>{w.level.toUpperCase()}</span>
+                  </div>
+                  <div style={{ fontSize: 14.5, fontWeight: 700, lineHeight: 1.3, color: T.cream, fontFamily: "'Inter',sans-serif", marginBottom: 5 }}>{w.title}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+                    <Clock size={12} />{w.when} · {w.sessions === 1 ? "1 session" : `${w.sessions} sessions`} · {w.duration}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ padding: "0 13px 13px" }}>
+                <div style={{ fontSize: 13, lineHeight: 1.55, color: T.dim, fontFamily: "'Inter',sans-serif", marginBottom: 12 }}>{w.blurb}</div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 13 }}>
+                  {w.outcomes.map(o => (
+                    <div key={o} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <Check size={13} color={T.community} strokeWidth={3} />
+                      <span style={{ fontSize: 12.5, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{o}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: T.dim, marginBottom: 6, fontFamily: "'Inter',sans-serif" }}>
+                    <span>{w.seats.taken} of {w.seats.total} seats taken</span>
+                    <span style={{ color: left <= 5 ? "#D7263D" : T.dim, fontWeight: left <= 5 ? 700 : 400 }}>
+                      {left <= 5 ? `Only ${left} left` : `${left} left`}
+                    </span>
+                  </div>
+                  <Meter value={w.seats.taken / w.seats.total} color={left <= 5 ? "#D7263D" : T.gold} />
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Avatar initials={w.host} size={28} onClick={() => openUser(w.host)} />
+                  <span style={{ flex: 1, fontSize: 12, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Led by {USERS[w.host].name}</span>
+                  <button onClick={() => toggle(w.id)} style={{
+                    border: isOn ? `1px solid ${T.gold}` : "none", cursor: "pointer", borderRadius: 999,
+                    padding: "9px 17px", fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 12.5,
+                    background: isOn ? "transparent" : `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})`,
+                    color: isOn ? T.gold : "#FFF",
+                  }}>{isOn ? "Enrolled" : "Enrol"}</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ height: 90 }} />
+    </div>
+  );
+};
+
+/**
+ * Read — the editorial shelf.
+ *
+ * Read-only for members. Articles are published by the FFG team through the
+ * admin API — members can no longer write pieces into the Library. The API
+ * enforces this (admin-only POST); this screen simply has no compose surface.
+ */
+const ReadTab = ({ openArticle }) => {
+  const minutes = ARTICLES.reduce((n, a) => n + (parseInt(a.read, 10) || 0), 0);
+  return (
+    <div style={{ padding: "0 18px" }}>
+      <StatStrip items={[
+        { v: ARTICLES.length, l: "articles" },
+        { v: `${minutes}m`, l: "of reading", c: T.connect },
+        { v: new Set(ARTICLES.map(a => a.author)).size, l: "writers", c: T.community },
+      ]} />
 
       {/* featured article */}
       <div onClick={() => openArticle(ARTICLES[0])} style={{
-        margin: "0 18px 14px", borderRadius: 20, overflow: "hidden", cursor: "pointer",
+        borderRadius: 20, overflow: "hidden", cursor: "pointer", marginBottom: 12,
         border: `1px solid ${T.line}`, background: T.card,
       }}>
         <img src={EVENT_PICS[ARTICLES[0].image]} alt="" style={{ width: "100%", display: "block" }} />
@@ -1605,7 +2077,7 @@ const Articles = ({ openArticle, openUser, member }) => {
       </div>
 
       {/* article list */}
-      <div style={{ padding: "0 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {ARTICLES.slice(1).map(a => {
           const author = USERS[a.author];
           return (
@@ -1629,6 +2101,54 @@ const Articles = ({ openArticle, openUser, member }) => {
         })}
       </div>
       <div style={{ height: 90 }} />
+    </div>
+  );
+};
+
+/**
+ * Library.
+ *
+ * Three shelves under one roof: Watch (recordings of past events), Learn
+ * (live workshops with finite seats) and Read (editorial). The choice is
+ * remembered, so a member who lives in Watch doesn't land on Read every time.
+ */
+const Articles = ({ openArticle, openReplay, openUser, member, watchVersion, shelfRequest }) => {
+  const [shelf, setShelf] = useState(() => readFlag("ffg.libraryTab") || "watch");
+  const pick = id => { setShelf(id); writeFlag("ffg.libraryTab", id); };
+  const active = LIB_TABS.find(t => t.id === shelf) || LIB_TABS[0];
+
+  // Search can land the member straight on a shelf. Each request carries a
+  // nonce so asking for the same shelf twice still takes effect.
+  useEffect(() => {
+    if (shelfRequest?.shelf) pick(shelfRequest.shelf);
+  }, [shelfRequest]);
+
+  return (
+    <div>
+      <SectionTitle eyebrow="IDEAS FROM THE COMMUNITY" title="Library" />
+
+      {/* shelf switch */}
+      <div style={{ display: "flex", gap: 8, padding: "0 18px 16px" }}>
+        {LIB_TABS.map(t => {
+          const Ico = t.icon; const on = t.id === shelf;
+          return (
+            <div key={t.id} onClick={() => pick(t.id)} style={{
+              flex: 1, cursor: "pointer", borderRadius: 16, padding: "11px 8px", textAlign: "center",
+              background: on ? T.cream : T.card,
+              border: `1px solid ${on ? T.cream : T.line}`,
+              transition: "background .2s ease",
+            }}>
+              <Ico size={16} color={on ? T.ink : T.cream} style={{ marginBottom: 5 }} />
+              <div style={{ fontSize: 13, fontWeight: 700, color: on ? T.ink : T.cream, fontFamily: "'Inter',sans-serif" }}>{t.label}</div>
+              <div style={{ fontSize: 10, color: on ? "rgba(247,244,238,0.7)" : T.dim, fontFamily: "'Inter',sans-serif", marginTop: 2 }}>{t.hint}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {active.id === "watch" && <WatchTab openReplay={openReplay} version={watchVersion} />}
+      {active.id === "learn" && <LearnTab openUser={openUser} />}
+      {active.id === "read" && <ReadTab openArticle={openArticle} />}
     </div>
   );
 };
@@ -1833,6 +2353,8 @@ const runSearch = q => {
     events: EVENTS.filter(e => hit(e.name, e.where, e.tag, e.about)),
     rooms: ROOMS.filter(r => hit(r.title, r.tag, r.desc, r.when)),
     reads: ARTICLES.filter(a => hit(a.title, a.excerpt, a.tag, USERS[a.author]?.name, ...(a.body || []))),
+    replays: REPLAYS.filter(r => hit(r.title, r.summary, r.tag, ...r.speakers.map(uid => USERS[uid]?.name))),
+    workshops: WORKSHOPS.filter(w => hit(w.title, w.blurb, w.tag, w.level, USERS[w.host]?.name, ...w.outcomes)),
   };
 };
 
@@ -1875,14 +2397,15 @@ const SearchIconBadge = ({ children }) => (
   }}>{children}</div>
 );
 
-const SearchScreen = ({ onBack, openUser, openRoom, openEvent, openArticle }) => {
+const SearchScreen = ({ onBack, openUser, openRoom, openEvent, openArticle, openReplay, openLearn }) => {
   const [q, setQ] = useState("");
   const inputRef = React.useRef(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   const res = runSearch(q);
   const total = res
-    ? res.members.length + res.posts.length + res.events.length + res.rooms.length + res.reads.length
+    ? res.members.length + res.posts.length + res.events.length + res.rooms.length
+      + res.reads.length + res.replays.length + res.workshops.length
     : 0;
 
   return (
@@ -1977,8 +2500,36 @@ const SearchScreen = ({ onBack, openUser, openRoom, openEvent, openArticle }) =>
           </SearchGroup>
         )}
 
+        {res && res.replays.length > 0 && (
+          <SearchGroup label="WATCH">
+            {res.replays.map(r => (
+              <SearchRow
+                key={r.id}
+                icon={<SearchIconBadge><Play size={18} color={T.gold} /></SearchIconBadge>}
+                title={r.title}
+                sub={`${r.date} · ${r.duration}`}
+                onClick={() => openReplay(r)}
+              />
+            ))}
+          </SearchGroup>
+        )}
+
+        {res && res.workshops.length > 0 && (
+          <SearchGroup label="LEARN">
+            {res.workshops.map(w => (
+              <SearchRow
+                key={w.id}
+                icon={<SearchIconBadge><GraduationCap size={18} color={T.gold} /></SearchIconBadge>}
+                title={w.title}
+                sub={w.live ? `● Live now · ${USERS[w.host]?.name}` : `${w.when} · ${w.level}`}
+                onClick={openLearn}
+              />
+            ))}
+          </SearchGroup>
+        )}
+
         {res && res.reads.length > 0 && (
-          <SearchGroup label="LIBRARY">
+          <SearchGroup label="READ">
             {res.reads.map(a => (
               <SearchRow
                 key={a.id}
@@ -2267,7 +2818,9 @@ const Composer = ({ member, onPost, onClose }) => {
     setBusy(true);
     try {
       const saved = await createApi(getToken).uploadImage(file, { kind: "post" });
-      setUpload(saved);
+      // Absolute, so the image also resolves when the app is served from a
+      // different origin than the API (the Vercel build).
+      setUpload({ ...saved, url: mediaUrl(saved.url) });
     } catch (e2) {
       setErr(e2.message || "Upload failed. Please try again.");
       setPreview(p => { if (p) URL.revokeObjectURL(p); return null; });
@@ -2917,6 +3470,11 @@ export default function FFGApp() {
   const [viewRoom, setViewRoom] = useState(null);
   const [viewEvent, setViewEvent] = useState(null);
   const [viewArticle, setViewArticle] = useState(null);
+  const [viewReplay, setViewReplay] = useState(null);
+  // Bumped when the replay viewer closes so the Watch shelf re-reads progress.
+  const [watchVersion, setWatchVersion] = useState(0);
+  // A one-shot "open the Library on this shelf" request, e.g. from search.
+  const [shelfRequest, setShelfRequest] = useState(null);
   const [showMessages, setShowMessages] = useState(false);
   const [chatWith, setChatWith] = useState(null);
   const [showNotifs, setShowNotifs] = useState(false);
@@ -2929,7 +3487,7 @@ export default function FFGApp() {
   const inApp = entered && !!member && !!isSignedIn;
   const showRail = vp.isDesktop && inApp;
   const resetViews = () => {
-    setViewUser(null); setViewRoom(null); setViewEvent(null); setViewArticle(null);
+    setViewUser(null); setViewRoom(null); setViewEvent(null); setViewArticle(null); setViewReplay(null);
     setShowMessages(false); setChatWith(null); setShowNotifs(false); setShowSearch(false);
   };
 
@@ -2978,7 +3536,16 @@ export default function FFGApp() {
           {tab === "rooms" && <Rooms openRoom={id => setViewRoom(id)} openUser={openUser} />}
           {tab === "connect" && <Connect openUser={openUser} />}
           {tab === "events" && <Events openEvent={id => setViewEvent(id)} />}
-          {tab === "reads" && <Articles openArticle={a => setViewArticle(a)} openUser={openUser} member={member} />}
+          {tab === "reads" && (
+            <Articles
+              openArticle={a => setViewArticle(a)}
+              openReplay={r => setViewReplay(r)}
+              openUser={openUser}
+              member={member}
+              watchVersion={watchVersion}
+              shelfRequest={shelfRequest}
+            />
+          )}
           {/* Capital screen hidden — see TABS above. */}
           {tab === "profile" && (
             <div style={{ position: "relative", height: "100%" }}>
@@ -3000,11 +3567,20 @@ export default function FFGApp() {
             openRoom={id => { setShowSearch(false); setViewRoom(id); }}
             openEvent={id => { setShowSearch(false); setViewEvent(id); }}
             openArticle={a => { setShowSearch(false); setViewArticle(a); }}
+            openReplay={r => { setShowSearch(false); setViewReplay(r); }}
+            openLearn={() => { setShowSearch(false); setTab("reads"); setShelfRequest({ shelf: "learn", n: Date.now() }); }}
           />
         )}
 
-        {/* article reader overlay */}
+        {/* article reader + replay viewer overlays */}
         {viewArticle && <ArticleReader article={viewArticle} onBack={() => setViewArticle(null)} openUser={openUser} />}
+        {viewReplay && (
+          <ReplayViewer
+            replay={viewReplay}
+            openUser={openUser}
+            onBack={() => { setViewReplay(null); setWatchVersion(v => v + 1); }}
+          />
+        )}
 
         {/* live room + event detail overlays */}
         {viewEvent && <EventDetail event={EVENTS.find(e => e.id === viewEvent)} onBack={() => setViewEvent(null)} openUser={openUser} member={member} />}
