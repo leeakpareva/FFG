@@ -219,6 +219,15 @@ adminRouter.post('/members', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,false) RETURNING id, name, handle, email`,
         [initials + suffix, name.trim(), handle + suffix, role, pillar, email.toLowerCase()]
       );
+      /* Sign-up is allowlist-only in Clerk, so an invite must open the door
+         there too or the new member can never register. */
+      if (clerk) {
+        try {
+          await clerk.allowlistIdentifiers.createAllowlistIdentifier({
+            identifier: email.toLowerCase(), notify: false,
+          });
+        } catch (e) { console.error('[admin] clerk allowlist add failed:', e.message); }
+      }
       return res.status(201).json(rows[0]);
     } catch (e) {
       if (e.code !== '23505') throw e;
@@ -312,7 +321,7 @@ adminRouter.post('/members/:id/message', async (req, res) => {
  * through open registration with their access restored.
  */
 adminRouter.delete('/members/:id', async (req, res) => {
-  const { rows } = await q('SELECT id, clerk_id FROM members WHERE id = $1', [req.params.id]);
+  const { rows } = await q('SELECT id, clerk_id, email FROM members WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'no such member' });
 
   const files = await q('SELECT storage_key FROM media WHERE owner_id = $1', [req.params.id]);
@@ -324,6 +333,14 @@ adminRouter.delete('/members/:id', async (req, res) => {
   if (rows[0].clerk_id && clerk) {
     try { await clerk.users.deleteUser(rows[0].clerk_id); }
     catch (e) { console.error('[admin] clerk delete failed:', e.message); }
+  }
+  if (rows[0].email && clerk) {
+    // Close the allowlist door too, or they could just sign up again.
+    try {
+      const { data } = await clerk.allowlistIdentifiers.getAllowlistIdentifierList({ limit: 500 });
+      const hit = data.find(a => a.identifier === rows[0].email);
+      if (hit) await clerk.allowlistIdentifiers.deleteAllowlistIdentifier(hit.id);
+    } catch (e) { console.error('[admin] clerk allowlist remove failed:', e.message); }
   }
   res.status(204).end();
 });
