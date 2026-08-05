@@ -1,15 +1,28 @@
 # Connect (FFG) — operations & state
 
-Last updated: 1 August 2026
+Last updated: 5 August 2026 (evening)
 
 ## Where it runs
 
+**On AWS since 5 Aug 2026** — dedicated EC2 `ffg-connect` (i-04a64edf230a7e58b,
+t3.medium, eu-west-2, own VPC, SSH-only security group; the IP changes on
+stop/start so look it up: `aws ec2 describe-instances`). App at `/opt/ffg`,
+compose runs ffg-connect (nginx+SPA), ffg-api, ffg-postgres (no published
+port) and ffg-tunnel (own Cloudflare tunnel `ffg-connect-aws`). The ASUS
+containers were deleted; volumes `ffg-pgdata`/`ffg-media` remain there as
+rollback.
+
 | | URL | Notes |
 |---|---|---|
-| **Client preview** | https://connect.navada-edge-server.uk | ASUS Docker → Cloudflare tunnel. **Send this to clients.** Public (no Access policy); app content still gated by Clerk sign-in. Calls the API same-origin through nginx. |
+| **Client app** | https://connect.navada-edge-server.uk | AWS via its own tunnel. **Send this to clients.** Clerk-gated content. Calls the API same-origin through nginx. |
 | Vercel | https://ffg-app.vercel.app | Same repo, auto-deploys on push to `main`. Reaches the API cross-origin via `VITE_API_BASE` — see below. |
 | Public API | https://api-connect.navada-edge-server.uk | `ffg-api` on the tunnel. Exists so the Vercel copy can reach the database, which sits on the private network. |
 | Repo | https://github.com/leeakpareva/FFG | Public. **No secrets may be committed.** |
+
+Deploying now means: scp changed files to `/opt/ffg`, then
+`docker compose build <svc> && docker compose up -d --force-recreate <svc>`.
+Never copy a local `.env` over the box's — it carries box-only keys
+(CLOUDFLARE_TUNNEL_TOKEN, R2_*, the `$$`-escaped admin hash).
 
 ### How Vercel reaches the API
 
@@ -23,13 +36,14 @@ API host directly instead of same-origin:
   explicit allowlist, never a wildcard, and credentials stay off because auth
   travels as an `Authorization` header rather than a cookie.
 
-## Containers (ASUS, all `restart: always`)
+## Containers (AWS box, all `restart: always`)
 
 | Container | Port | Purpose |
 |---|---|---|
-| `ffg-connect` | 8100→80 | nginx serving the built SPA. On networks `bridge` + `navada-edge`. |
-| `ffg-api` | 8110→8110 | Express + pg + Clerk. Uploads land on volume `ffg-media`. On `navada-edge`. |
-| `ffg-postgres` | 5435→5432 | Postgres 17.10 + pgvector 0.8.3. Volume `ffg-pgdata`. |
+| `ffg-connect` | 8100→80 | nginx serving the built SPA, proxying `/api`, `/media`, `/ws`. |
+| `ffg-api` | 8110 | Express + pg + Clerk + LiveKit + Stripe + WebSocket. Media in R2. |
+| `ffg-postgres` | none published | Postgres 17 + pgvector. Volume `ffg-pgdata`. `docker exec` to reach it. |
+| `ffg-tunnel` | outbound only | cloudflared, tunnel `ffg-connect-aws`. |
 
 ### Gotcha: never launch `ffg-api` from Git Bash
 
@@ -100,35 +114,43 @@ docker exec -it ffg-postgres psql -U postgres -d ffg
 
 ## State: done vs outstanding
 
-**Done**
-- Light-only theme; Capital tab hidden (pillar retained); Stories removed
-- Clerk self-signup blocked (`transferable: false`) + in-app `/not-a-member`
-- Working search across members, posts, events, rooms, library
-- Naming: header "Connect", tab "Meet", "Library", "Connect Concierge"
-- Two-circle `AgentMark` replacing every sparkle icon
-- Postgres + pgvector schema applied; Jeen AI data deleted (Ada's DB untouched)
-- Containerised and published on the tunnel
-- **Image uploads working on both sites**, verified end to end on 1 Aug 2026:
-  member resolved → `POST /api/media` 201 → file served back as `image/png` →
-  bytes on the `ffg-media` volume → a non-image correctly rejected with 415
+**Done (as of 5 Aug 2026, evening)**
+- Fully data-driven app: social layer (posts w/ photo+video, likes, comments,
+  saves, tags, follows, DMs), ML-ranked feed, admin panel (/admin, separate
+  bundle), Stripe paid events (client's own account, live), Cloudflare Stream
+  replays, LiveKit room audio + room chat, working search, profile editing
+- **Real-time layer**: one Clerk-authenticated WebSocket per open app (`/ws`);
+  dm / post / comment events are doorbells — clients refetch over REST, the
+  polls stay as the safety net
+- **Clerk sign-up closed server-side**: instance restriction `allowlist: true`
+  (sign-in unaffected). Inviting a member adds their email to the allowlist;
+  deleting removes it. All 5 member emails allowlisted (incl. Ann-Marie's
+  unclaimed row)
+- **Media in R2**: STORAGE_DRIVER=r2 on the box; bucket `navada-assets`,
+  prefix `ffg/`; all 17 pre-existing files backfilled (idempotent script:
+  `docker exec ffg-api node scripts/backfill-r2.js`). Local volume retained
+  as rollback. Serving (incl. range requests for video seek) goes through
+  the driver
+- **Bundle**: main 827KB → 275KB; RoomStage/livekit is a lazy chunk that
+  loads on room entry
+- `members` seeded and claimed for all four real Clerk users; `AH`
+  (Ann-Marie) pre-created, claims on her first sign-in
 
 **Outstanding**
-1. **Seed `members`** — the table is **empty apart from `LA`**. `requireMember`
-   answers **403 "not a member"** to any Clerk user with no row, so a tester who
-   signs in successfully still cannot upload or post. Every Clerk account that
-   is meant to test needs a row whose `email` matches their sign-in address.
-   Current Clerk users: `leeakpareva@gmail.com` (seeded, admin),
-   `charlenegrichards@gmail.com`, `ffgcontent@gmail.com`, `send2chopstix@gmail.com`.
-2. **API layer** — uploads and articles are wired; the rest of the screens still
-   read the hardcoded constants in `FFGApp.jsx`.
-3. **Seed** the remaining real data from those constants into the database.
-4. **Rooms** — wire join/leave/presence to `room_participants`. Audio deferred
-   (needs a WebRTC SFU; **no GPU required**).
-5. **Uploads → R2** — files currently live on the local `ffg-media` volume.
-   `storage.js` abstracts this behind put/remove/exists, so moving to R2
-   (bucket `navada-assets`) is a driver swap plus a backfill, not a rewrite.
-6. **Concierge** — its Anthropic call ships with no API key, so it always falls
-   back to canned replies. Needs a server-side proxy holding the key.
-6. **Clerk sign-up mode** is still `public` in the dashboard. The code guard
-   holds, but close it server-side: Configure → Restrictions → Restricted.
-7. `FFGApp.jsx` is ~2,900 lines holding every screen; bundle is 755 KB.
+1. **OpenAI credits** — the account is exhausted (`credit_balance_exhausted`),
+   which holds back BOTH the embeddings backfill and the live Concierge
+   (canned replies until then). After topping up:
+   `docker exec ffg-api node scripts/backfill-embeddings.js` (now covers
+   members, posts, events, rooms, articles, replays, workshops).
+2. **Capital tab** — hidden by design; the pillar exists in the schema. This
+   is a product decision for FFG (what does Capital DO for members?), not an
+   engineering gap. Do not build speculative financial content.
+3. **Clerk pk_live** — deferred with the App Store plan: needs the production
+   instance (domain + DNS + OAuth creds) in the dashboard, and swapping keys
+   mid-UAT would sign every tester out.
+4. **FFGApp.jsx** (~3,900 lines) still holds most screens. The bundle cost is
+   solved; the remaining cost is maintainability. Split deliberately, screen
+   by screen, not during live client testing.
+5. Rooms audio group-test with the client (built and live; untested with 2+
+   real people).
+6. AWS account still uses root credentials — create an IAM user.
