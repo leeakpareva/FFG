@@ -13,7 +13,7 @@ import {
 } from './ui.jsx';
 import { api } from './api.js';
 
-const SHELVES = ['Articles', 'Events', 'Replays', 'Workshops'];
+const SHELVES = ['Articles', 'Events', 'Rooms', 'Replays', 'Workshops'];
 
 export default function Content() {
   const [shelf, setShelf] = useState('Articles');
@@ -33,6 +33,7 @@ export default function Content() {
       </div>
       {shelf === 'Articles' && <Articles />}
       {shelf === 'Events' && <Events />}
+      {shelf === 'Rooms' && <Rooms />}
       {shelf === 'Replays' && <Replays />}
       {shelf === 'Workshops' && <Workshops />}
     </div>
@@ -67,29 +68,39 @@ const ErrorLine = ({ text }) => (
   <div style={{ fontSize: 13, color: '#B3261E', fontFamily: fontBody, marginBottom: 12 }}>{text}</div>
 );
 
-/** Cover image picker: uploads through the admin media endpoint. */
-const CoverField = ({ imageKey, onKey }) => {
+/**
+ * Media picker for content — cover images, thumbnails, or a video clip.
+ * Uploads through the admin endpoint (owned by the house account) and hands
+ * back both the storage key and the media id, whichever the sheet needs.
+ */
+const CoverField = ({ imageKey, onPicked, label = 'Cover image or clip (optional)' }) => {
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
   const fileRef = useRef(null);
+  const isVid = /\.(mp4|webm|mov)$/i.test(imageKey || '');
   const pick = async (e) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    setBusy(true);
+    setBusy(true); setErr(null);
     try {
-      const { key } = await api.uploadMedia(file);
-      onKey(key);
-    } catch { /* the field simply stays empty */ }
+      const { id, key } = await api.uploadMedia(file);
+      onPicked({ id, key });
+    } catch (ex) { setErr(ex.message); }
     setBusy(false);
   };
   return (
-    <Field label="Cover image (optional)">
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+    <Field label={label}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <Button kind="ghost" type="button" onClick={() => fileRef.current?.click()} disabled={busy}>
-          {busy ? 'Uploading…' : imageKey ? 'Replace image' : 'Choose image'}
+          {busy ? 'Uploading…' : imageKey ? 'Replace' : 'Choose photo or video'}
         </Button>
-        {imageKey && <img src={`/media/${imageKey}`} alt="" style={{ height: 44, borderRadius: 8 }} />}
-        <input ref={fileRef} type="file" accept="image/*" onChange={pick} style={{ display: 'none' }} />
+        {imageKey && (isVid
+          ? <video src={`/media/${imageKey}`} muted style={{ height: 44, borderRadius: 8 }} />
+          : <img src={`/media/${imageKey}`} alt="" style={{ height: 44, borderRadius: 8 }} />)}
+        <input ref={fileRef} type="file" accept="image/*,video/mp4,video/webm,video/quicktime" onChange={pick} style={{ display: 'none' }} />
       </div>
+      {err && <div style={{ fontSize: 12, color: '#B3261E', fontFamily: fontBody, marginTop: 6 }}>{err}</div>}
     </Field>
   );
 };
@@ -130,7 +141,7 @@ function Articles() {
 }
 
 const ArticleSheet = ({ onClose, onDone }) => {
-  const [form, setForm] = useState({ title: '', excerpt: '', tag: 'Community', read_time: '4 min', body: '', image_key: null });
+  const [form, setForm] = useState({ title: '', excerpt: '', tag: 'Community', read_time: '4 min', body: '', image_key: null, media_id: null });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const put = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
@@ -138,10 +149,9 @@ const ArticleSheet = ({ onClose, onDone }) => {
   const submit = async (draft) => {
     setBusy(true); setError(null);
     try {
-      let media_id = null;
       await api.createArticle({
         title: form.title, excerpt: form.excerpt, tag: form.tag, read_time: form.read_time,
-        media_id,
+        media_id: form.media_id,
         body: form.body.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean),
         is_draft: draft,
       });
@@ -168,6 +178,8 @@ const ArticleSheet = ({ onClose, onDone }) => {
       <Field label="Body — blank line between paragraphs">
         <TextArea value={form.body} onChange={put('body')} style={{ minHeight: 200 }} />
       </Field>
+      <CoverField imageKey={form.image_key} label="Hero image (optional)"
+        onPicked={({ id, key }) => setForm(f => ({ ...f, image_key: key, media_id: id }))} />
       {error && <ErrorLine text={error} />}
       <div style={{ display: 'flex', gap: 10 }}>
         <Button onClick={() => submit(false)} disabled={busy || !form.title || !form.body.trim()} style={{ flex: 1 }}>
@@ -257,10 +269,154 @@ const EventSheet = ({ onClose, onDone }) => {
         <div style={{ flex: 1 }}><Field label="Ticket price £ (blank = free)"><Input value={form.price} onChange={put('price')} placeholder="25.00" /></Field></div>
       </div>
       <Field label="About"><TextArea value={form.about} onChange={put('about')} /></Field>
-      <CoverField imageKey={form.image_key} onKey={key => setForm(f => ({ ...f, image_key: key }))} />
+      <CoverField imageKey={form.image_key} onPicked={({ key }) => setForm(f => ({ ...f, image_key: key }))} />
       {error && <ErrorLine text={error} />}
       <Button onClick={submit} disabled={busy || !form.name || !form.venue || !form.day || !form.month} style={{ width: '100%' }}>
         {busy ? 'Creating…' : 'Create event'}
+      </Button>
+    </Sheet>
+  );
+};
+
+/* ----------------------------------------------------------------- rooms */
+
+/**
+ * Rooms are created HERE, not by members — the club runs its own stages.
+ * Hosts picked at creation walk on as moderators when they join. "Go live"
+ * is what makes a room joinable in the app.
+ */
+function Rooms() {
+  const [rows, setRows] = useState(null);
+  const [members, setMembers] = useState([]);
+  const [composing, setComposing] = useState(false);
+  const [editingHosts, setEditingHosts] = useState(null); // room whose hosts are being edited
+  const load = () => Promise.all([api.rooms(), api.members()])
+    .then(([r, m]) => { setRows(r.rooms); setMembers(m.members); })
+    .catch(() => setRows([]));
+  useEffect(() => { load(); }, []);
+  if (!rows) return <EmptyState title="Loading…" />;
+
+  return (
+    <>
+      <div style={{ marginBottom: 12 }}><Button onClick={() => setComposing(true)}>Create a room</Button></div>
+      <Card style={{ padding: 0, overflow: 'hidden' }}>
+        {rows.map((r, i) => (
+          <Row key={r.id} first={!i}>
+            <RowTitle title={r.title}
+              sub={`${(r.hosts || []).map(h => h.name).join(', ') || 'no hosts'} · ${r.in_room} in room${r.scheduled_for ? ' · ' + r.scheduled_for : ''}`} />
+            <PillarTag name={r.tag} />
+            {r.is_live && <span style={{ fontSize: 10, fontWeight: 700, color: '#D7263D', fontFamily: fontBody }}>● LIVE</span>}
+            <Button kind="ghost" style={{ padding: '8px 14px' }} onClick={() => setEditingHosts(r)}>Hosts…</Button>
+            <Button kind="ghost" style={{ padding: '8px 14px' }}
+                    onClick={() => api.updateRoom(r.id, { is_live: !r.is_live }).then(load)}>
+              {r.is_live ? 'End live' : 'Go live'}
+            </Button>
+            <Button kind="ghost" style={{ padding: '8px 14px', color: '#B3261E' }}
+                    onClick={() => window.confirm(`Delete room "${r.title}"?`) && api.deleteRoom(r.id).then(load)}>
+              Delete
+            </Button>
+          </Row>
+        ))}
+        {!rows.length && <EmptyState title="No rooms yet" hint="Create one and go live — it appears on the members' Rooms tab." />}
+      </Card>
+      {composing && <RoomSheet members={members} onClose={() => setComposing(false)} onDone={() => { setComposing(false); load(); }} />}
+      {editingHosts && (
+        <HostsSheet room={editingHosts} members={members}
+          onClose={() => setEditingHosts(null)}
+          onDone={() => { setEditingHosts(null); load(); }} />
+      )}
+    </>
+  );
+}
+
+/** Fix the hosts after the fact — who runs the room, with the microphone. */
+const HostsSheet = ({ room, members, onClose, onDone }) => {
+  const [hosts, setHosts] = useState((room.hosts || []).map(h => h.id));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const toggle = (id) => setHosts(h => h.includes(id) ? h.filter(x => x !== id) : h.length < 6 ? [...h, id] : h);
+  const save = async () => {
+    setBusy(true); setError(null);
+    try { await api.updateRoom(room.id, { hosts }); onDone(); }
+    catch (e) { setError(e.message); setBusy(false); }
+  };
+  return (
+    <Sheet title={`Hosts — ${room.title}`} onClose={onClose}>
+      <div style={{ fontSize: 12.5, color: T.dim, fontFamily: fontBody, marginBottom: 14, lineHeight: 1.6 }}>
+        Hosts walk on stage with the microphone the moment they join. Anyone
+        already in the room should leave and rejoin to pick up the change.
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>
+        {members.map(m => {
+          const on = hosts.includes(m.id);
+          return (
+            <button key={m.id} type="button" onClick={() => toggle(m.id)} style={{
+              border: `1px solid ${on ? T.gold : T.line}`, background: on ? `${T.gold}14` : T.card,
+              borderRadius: 999, padding: '6px 12px', cursor: 'pointer',
+              fontFamily: fontBody, fontWeight: 600, fontSize: 12.5,
+              color: on ? T.goldSoft : T.cream,
+            }}>{on ? '✓ ' : ''}{m.name}</button>
+          );
+        })}
+      </div>
+      {error && <ErrorLine text={error} />}
+      <Button onClick={save} disabled={busy} style={{ width: '100%' }}>
+        {busy ? 'Saving…' : 'Save hosts'}
+      </Button>
+    </Sheet>
+  );
+};
+
+const RoomSheet = ({ members, onClose, onDone }) => {
+  const [form, setForm] = useState({ title: '', description: '', tag: 'Community', scheduled_for: '', is_live: false });
+  const [hosts, setHosts] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const put = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+  const toggleHost = (id) => setHosts(h => h.includes(id) ? h.filter(x => x !== id) : h.length < 6 ? [...h, id] : h);
+
+  const submit = async () => {
+    setBusy(true); setError(null);
+    try { await api.createRoom({ ...form, hosts }); onDone(); }
+    catch (e) { setError(e.message); setBusy(false); }
+  };
+
+  return (
+    <Sheet title="New room" onClose={onClose} wide>
+      <Field label="Title"><Input value={form.title} onChange={put('title')} autoFocus placeholder="Fundraising in 2026 — what's working" /></Field>
+      <Field label="Description"><TextArea value={form.description} onChange={put('description')} /></Field>
+      <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <Field label="Pillar">
+            <Select value={form.tag} onChange={put('tag')}>
+              <option>Capital</option><option>Community</option><option>Connect</option>
+            </Select>
+          </Field>
+        </div>
+        <div style={{ flex: 1 }}><Field label="When — as members read it"><Input value={form.scheduled_for} onChange={put('scheduled_for')} placeholder="Today 7 PM" /></Field></div>
+      </div>
+      <Field label="Hosts — they walk on stage as moderators">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+          {members.map(m => {
+            const on = hosts.includes(m.id);
+            return (
+              <button key={m.id} type="button" onClick={() => toggleHost(m.id)} style={{
+                border: `1px solid ${on ? T.gold : T.line}`, background: on ? `${T.gold}14` : T.card,
+                borderRadius: 999, padding: '6px 12px', cursor: 'pointer',
+                fontFamily: fontBody, fontWeight: 600, fontSize: 12.5,
+                color: on ? T.goldSoft : T.cream,
+              }}>{on ? '✓ ' : ''}{m.name}</button>
+            );
+          })}
+        </div>
+      </Field>
+      <label style={{ display: 'flex', gap: 9, alignItems: 'center', marginBottom: 16, cursor: 'pointer' }}>
+        <input type="checkbox" checked={form.is_live} onChange={e => setForm(f => ({ ...f, is_live: e.target.checked }))} />
+        <span style={{ fontSize: 13, color: T.dim, fontFamily: fontBody }}>Go live immediately</span>
+      </label>
+      {error && <ErrorLine text={error} />}
+      <Button onClick={submit} disabled={busy || !form.title} style={{ width: '100%' }}>
+        {busy ? 'Creating…' : 'Create room'}
       </Button>
     </Sheet>
   );
@@ -307,7 +463,7 @@ function Replays() {
 }
 
 const ReplaySheet = ({ onClose, onDone }) => {
-  const [form, setForm] = useState({ title: '', summary: '', tag: 'Community', duration: '' });
+  const [form, setForm] = useState({ title: '', summary: '', tag: 'Community', duration: '', image_key: null });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const put = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
@@ -330,6 +486,8 @@ const ReplaySheet = ({ onClose, onDone }) => {
         </div>
         <div style={{ flex: 1 }}><Field label="Duration"><Input value={form.duration} onChange={put('duration')} placeholder="48 min" /></Field></div>
       </div>
+      <CoverField imageKey={form.image_key} label="Thumbnail (optional)"
+        onPicked={({ key }) => setForm(f => ({ ...f, image_key: key }))} />
       {error && <ErrorLine text={error} />}
       <Button onClick={submit} disabled={busy || !form.title} style={{ width: '100%' }}>
         {busy ? 'Creating…' : 'Create — then upload the video'}
@@ -457,7 +615,7 @@ function Workshops() {
 const WorkshopSheet = ({ onClose, onDone }) => {
   const [form, setForm] = useState({
     title: '', blurb: '', tag: 'Community', level: 'Beginner', duration: '90 min',
-    sessions: 1, seats_total: 20, when_label: '', outcomes: '',
+    sessions: 1, seats_total: 20, when_label: '', outcomes: '', image_key: null,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -501,6 +659,8 @@ const WorkshopSheet = ({ onClose, onDone }) => {
       </div>
       <Field label="When — as members should read it"><Input value={form.when_label} onChange={put('when_label')} placeholder="Tue 12 Aug · 6pm" /></Field>
       <Field label="Outcomes — one per line"><TextArea value={form.outcomes} onChange={put('outcomes')} /></Field>
+      <CoverField imageKey={form.image_key} label="Thumbnail (optional)"
+        onPicked={({ key }) => setForm(f => ({ ...f, image_key: key }))} />
       {error && <ErrorLine text={error} />}
       <Button onClick={submit} disabled={busy || !form.title} style={{ width: '100%' }}>
         {busy ? 'Creating…' : 'Create workshop'}

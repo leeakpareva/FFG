@@ -32,6 +32,7 @@ export function useRoom(roomId, getToken, myId) {
   const [speaking, setSpeaking] = useState([]);
   const [error, setError] = useState(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [chat, setChat] = useState([]); // in-room messages, ephemeral by design
 
   const lkRef = useRef(null);
   const apiRef = useRef(null);
@@ -75,11 +76,17 @@ export function useRoom(roomId, getToken, myId) {
 
       lk.on(RoomEvent.TrackSubscribed, (track) => {
         if (track.kind !== Track.Kind.Audio) return;
-        // Attaching to a detached element is enough for the browser to play it;
-        // keeping the reference on the track lets LiveKit clean it up.
+        /* NOT display:none — iOS Safari refuses to play hidden media
+           elements, which is exactly "we can see each other but hear
+           nothing". An <audio> element draws nothing anyway; parking it
+           offscreen keeps it playable everywhere. */
         const el = track.attach();
-        el.style.display = "none";
+        el.setAttribute("playsinline", "");
+        el.style.position = "fixed";
+        el.style.left = "-9999px";
+        el.style.top = "0";
         document.body.appendChild(el);
+        el.play?.().catch(() => setAudioBlocked(true));
       });
 
       lk.on(RoomEvent.TrackUnsubscribed, (track) => {
@@ -91,6 +98,30 @@ export function useRoom(roomId, getToken, myId) {
       });
 
       lk.on(RoomEvent.Disconnected, () => setStatus("idle"));
+
+      /* Playback can get blocked AFTER join (Safari especially, when tracks
+         arrive later than the joining tap). This keeps the "enable sound"
+         prompt honest for the whole session, not just the first second. */
+      lk.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        setAudioBlocked(!lk.canPlaybackAudio);
+      });
+
+      /* In-room chat rides LiveKit's data channel: real-time, room-scoped,
+         gone when the room ends — exactly what stage chat should be. */
+      lk.on(RoomEvent.DataReceived, (payload, participant) => {
+        try {
+          const msg = JSON.parse(new TextDecoder().decode(payload));
+          if (msg?.t !== "chat" || !msg.text) return;
+          setChat((c) => [...c.slice(-199), {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            from: participant?.identity || "?",
+            name: msg.name || participant?.name || participant?.identity || "Member",
+            text: String(msg.text).slice(0, 500),
+            at: Date.now(),
+            me: false,
+          }]);
+        } catch { /* not our payload */ }
+      });
 
       // The server grants the microphone by updating the live participant, so
       // being brought on stage arrives here as a permission change rather than
@@ -196,6 +227,22 @@ export function useRoom(roomId, getToken, myId) {
 
   const clearError = useCallback(() => setError(null), []);
 
+  /** Send a chat line to everyone in the room. Local echo is immediate. */
+  const sendChat = useCallback(async (text, myName) => {
+    const lk = lkRef.current;
+    const body = String(text || "").trim().slice(0, 500);
+    if (!lk || !body) return;
+    setChat((c) => [...c.slice(-199), {
+      id: `${Date.now()}-me`, from: myId, name: myName || "You", text: body, at: Date.now(), me: true,
+    }]);
+    try {
+      await lk.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify({ t: "chat", text: body, name: myName })),
+        { reliable: true }
+      );
+    } catch { /* the local echo stands; the room may not have heard */ }
+  }, [myId]);
+
   const unblockAudio = useCallback(async () => {
     try {
       await lkRef.current?.startAudio();
@@ -275,6 +322,7 @@ export function useRoom(roomId, getToken, myId) {
 
   return {
     status, role, moderator, canSpeak, participants, handRaised, micOn, speaking, error, audioBlocked,
+    chat, sendChat,
     join, leave, raiseHand, toggleMic, bringUp, stepDown, unblockAudio, clearError,
     setRole, setParticipants,
   };

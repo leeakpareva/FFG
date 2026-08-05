@@ -4,6 +4,11 @@ import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    // Baked at build time; shown in the profile menu so "which version am I
+    // actually running?" is answerable by looking, not guessing.
+    __BUILD_STAMP__: JSON.stringify(new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC'),
+  },
   build: {
     chunkSizeWarningLimit: 1400,
     rollupOptions: {

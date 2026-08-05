@@ -18,8 +18,10 @@
  *   everyone else gets the profile.
  */
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   Mic, MicOff, Hand, LogOut, Radio, X, ChevronDown, Volume2, Users,
+  MessageCircle, Send,
 } from "lucide-react";
 import { useAuth } from "@clerk/clerk-react";
 import { useRoom } from "./useRoom.js";
@@ -148,6 +150,40 @@ export default function RoomStage({ T, room, profile, onLeave, openUser }) {
   const R = useRoom(room.id, getToken, profile?.id);
   const [tapped, setTapped] = useState(null);
 
+  /* The notify: when a NEW hand goes up and you're on stage, a banner
+     announces it — the person listening should not have to hope a
+     moderator scrolls down. */
+  const [handAlert, setHandAlert] = useState(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSeen, setChatSeen] = useState(0); // messages read; badge shows the rest
+  const chatScrollRef = React.useRef(null);
+  useEffect(() => {
+    if (chatOpen) {
+      setChatSeen(R.chat.length);
+      if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatOpen, R.chat.length]);
+  const chatUnread = R.chat.length - chatSeen;
+  const prevHands = React.useRef(new Set());
+  useEffect(() => {
+    const now = new Set(R.participants.filter(p => p.hand_raised).map(p => p.member_id));
+    if (R.role === "speaker") {
+      for (const id of now) {
+        if (!prevHands.current.has(id)) {
+          const person = R.participants.find(p => p.member_id === id);
+          if (person && person.member_id !== profile?.id) setHandAlert(person);
+        }
+      }
+    }
+    prevHands.current = now;
+  }, [R.participants, R.role, profile?.id]);
+  useEffect(() => {
+    if (!handAlert) return;
+    const t = setTimeout(() => setHandAlert(null), 9000);
+    return () => clearTimeout(t);
+  }, [handAlert]);
+
   useEffect(() => {
     R.join();
     return () => { R.leave(); };
@@ -164,8 +200,33 @@ export default function RoomStage({ T, room, profile, onLeave, openUser }) {
 
   const leaveAll = async () => { await R.leave(); onLeave(); };
 
-  return (
-    <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 30, display: "flex", flexDirection: "column" }}>
+  return createPortal(
+    /* Portalled to <body>: rendered inside the frame, the bottom tab bar
+       painted over the mic controls — the same trap the composer had. */
+    <div style={{ position: "fixed", inset: 0, background: T.ink, zIndex: 990, display: "flex", flexDirection: "column" }}>
+
+      {/* ✋ someone wants to speak — visible to everyone on stage */}
+      {handAlert && (
+        <div style={{
+          position: "absolute", top: 66, left: 14, right: 14, zIndex: 20,
+          background: T.ink2, border: `1px solid ${T.gold}66`, borderRadius: 16,
+          padding: "12px 14px", display: "flex", alignItems: "center", gap: 11,
+          boxShadow: `0 10px 30px #00000035`,
+        }}>
+          <Hand size={18} color={T.gold} />
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontFamily: "'Inter',sans-serif", color: T.cream }}>
+            <strong>{handAlert.name?.split(" ")[0] || handAlert.member_id}</strong> wants to speak
+          </span>
+          {canModerate && (
+            <button onClick={() => { R.bringUp(handAlert.member_id); setHandAlert(null); }} style={{
+              border: "none", cursor: "pointer", borderRadius: 999, padding: "8px 14px",
+              background: `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})`, color: "#FFF",
+              fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 12.5,
+            }}>Bring up</button>
+          )}
+          <X size={16} color={T.dim} style={{ cursor: "pointer" }} onClick={() => setHandAlert(null)} />
+        </div>
+      )}
 
       {/* header */}
       <div style={{
@@ -324,6 +385,23 @@ export default function RoomStage({ T, room, profile, onLeave, openUser }) {
           fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13,
         }}><LogOut size={15} />Leave</button>
 
+        {/* 💬 room chat */}
+        <button onClick={() => setChatOpen(o => !o)} style={{
+          position: "relative",
+          padding: "13px 15px", borderRadius: 999, border: `1px solid ${chatOpen ? T.gold : T.line}`,
+          cursor: "pointer", background: chatOpen ? `${T.gold}14` : T.card, color: chatOpen ? T.gold : T.cream,
+          display: "flex", alignItems: "center",
+        }}>
+          <MessageCircle size={17} />
+          {chatUnread > 0 && !chatOpen && (
+            <span style={{
+              position: "absolute", top: -4, right: -4, minWidth: 17, height: 17, borderRadius: 9,
+              background: T.gold, color: "#FFF", fontSize: 10, fontWeight: 800, padding: "0 4px",
+              display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter',sans-serif",
+            }}>{chatUnread}</span>
+          )}
+        </button>
+
         {onStage ? (
           /* The single most important control in the app when you are on
              stage, so it is the loudest thing in the bar: gold when off, so
@@ -363,7 +441,53 @@ export default function RoomStage({ T, room, profile, onLeave, openUser }) {
         />
       )}
 
+      {/* room chat panel — ephemeral, room-scoped, gone when the room ends */}
+      {chatOpen && (
+        <div style={{
+          position: "absolute", left: 0, right: 0, bottom: 0, height: "55%", zIndex: 30,
+          background: T.ink2, borderTop: `1px solid ${T.line}`, borderRadius: "20px 20px 0 0",
+          display: "flex", flexDirection: "column", boxShadow: "0 -10px 34px #00000025",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px 9px", flexShrink: 0 }}>
+            <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Room chat</span>
+            <X size={20} color={T.dim} style={{ cursor: "pointer" }} onClick={() => setChatOpen(false)} />
+          </div>
+          <div ref={chatScrollRef} style={{ flex: 1, overflowY: "auto", padding: "0 16px" }}>
+            {!R.chat.length && (
+              <div style={{ padding: "26px 10px", textAlign: "center", fontSize: 12.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+                Say something — everyone in the room sees it. Messages vanish when the room ends.
+              </div>
+            )}
+            {R.chat.map(m => (
+              <div key={m.id} style={{ padding: "6px 0", display: "flex", gap: 8 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: m.me ? T.gold : T.cream, fontFamily: "'Inter',sans-serif", flexShrink: 0 }}>
+                  {m.me ? "You" : (m.name || m.from).split(" ")[0]}
+                </span>
+                <span style={{ fontSize: 13, lineHeight: 1.5, color: T.cream, fontFamily: "'Inter',sans-serif", minWidth: 0, overflowWrap: "anywhere" }}>{m.text}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, padding: "9px 14px calc(12px + env(safe-area-inset-bottom))", borderTop: `1px solid ${T.line}`, flexShrink: 0 }}>
+            <input value={chatInput} onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && chatInput.trim()) { R.sendChat(chatInput, profile?.name); setChatInput(""); } }}
+              placeholder="Message the room…" style={{
+                flex: 1, padding: "11px 14px", borderRadius: 999, outline: "none",
+                background: T.card, border: `1px solid ${T.line}`, color: T.cream,
+                fontSize: 13.5, fontFamily: "'Inter',sans-serif",
+              }} />
+            <button onClick={() => { if (chatInput.trim()) { R.sendChat(chatInput, profile?.name); setChatInput(""); } }}
+              disabled={!chatInput.trim()} style={{
+                width: 42, height: 42, borderRadius: 21, border: "none",
+                cursor: chatInput.trim() ? "pointer" : "default",
+                background: chatInput.trim() ? `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})` : T.card,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}><Send size={16} color={chatInput.trim() ? "#FFF" : T.dim} /></button>
+          </div>
+        </div>
+      )}
+
       <style>{`@keyframes ffgPulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }`}</style>
-    </div>
+    </div>,
+    document.body
   );
 }

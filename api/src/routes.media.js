@@ -15,8 +15,8 @@ import { requireMember } from './auth.js';
 import * as storage from './storage.js';
 import { track } from './track.js';
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;   // 8MB
-const MAX_VIDEO_BYTES = 60 * 1024 * 1024;  // 60MB — short clips, not films
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;  // 25MB — full-resolution phone photos
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024; // 100MB — full clips
 
 // mime -> extension. These maps ARE the allowlist: anything absent is
 // rejected. Videos are capped separately because they are honestly bigger.
@@ -61,7 +61,7 @@ mediaRouter.post('/', requireMember, upload.single('file'), async (req, res) => 
     });
   }
   if (isImage && req.file.size > MAX_IMAGE_BYTES) {
-    return res.status(413).json({ error: 'too large', detail: 'Images are capped at 8MB.' });
+    return res.status(413).json({ error: 'too large', detail: 'Images are capped at 25MB.' });
   }
   // Avatars are images, full stop.
   if (isVideo && kind === 'avatar') {
@@ -101,7 +101,7 @@ mediaRouter.post('/', requireMember, upload.single('file'), async (req, res) => 
 /** Multer rejects oversize files with its own error code — translate it. */
 mediaRouter.use((err, _req, res, next) => {
   if (err?.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ error: 'file too large', detail: 'Maximum 8MB' });
+    return res.status(413).json({ error: 'file too large', detail: 'Images up to 25MB, video up to 100MB.' });
   }
   if (err) {
     console.error('[media]', err.message);

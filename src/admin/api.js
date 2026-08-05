@@ -88,6 +88,11 @@ export const api = {
   updateWorkshop: (id, patch) => call(`/api/admin/workshops/${id}`, { method: 'PATCH', body: patch }),
   deleteWorkshop: (id) => call(`/api/admin/workshops/${id}`, { method: 'DELETE' }),
 
+  rooms: () => call('/api/admin/rooms'),
+  createRoom: (body) => call('/api/admin/rooms', { method: 'POST', body }),
+  updateRoom: (id, patch) => call(`/api/admin/rooms/${id}`, { method: 'PATCH', body: patch }),
+  deleteRoom: (id) => call(`/api/admin/rooms/${id}`, { method: 'DELETE' }),
+
   payments: () => call('/api/admin/payments'),
   createPayment: (body) => call('/api/admin/payments', { method: 'POST', body }),
   recordManualPayment: (body) => call('/api/admin/payments/manual', { method: 'POST', body }),

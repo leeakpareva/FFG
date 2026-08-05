@@ -28,12 +28,80 @@ articlesRouter.get('/', requireMember, async (_req, res) => {
 articlesRouter.get('/:id', requireMember, async (req, res) => {
   const { rows } = await q('SELECT * FROM articles WHERE id = $1 AND NOT is_draft', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
-  const paras = await q(
-    'SELECT body FROM article_paragraphs WHERE article_id = $1 ORDER BY ord',
-    [req.params.id]
-  );
+  const [paras, engagement] = await Promise.all([
+    q('SELECT body FROM article_paragraphs WHERE article_id = $1 ORDER BY ord', [req.params.id]),
+    q(`SELECT
+         (SELECT count(*)::int FROM article_likes al WHERE al.article_id = $1) AS likes,
+         EXISTS (SELECT 1 FROM article_likes al WHERE al.article_id = $1 AND al.member_id = $2) AS liked,
+         (SELECT count(*)::int FROM article_comments ac WHERE ac.article_id = $1) AS comments`,
+      [req.params.id, req.member.id]),
+  ]);
   track(req.member.id, 'article_read', { article: req.params.id });
-  res.json({ ...rows[0], body: paras.rows.map(p => p.body) });
+  res.json({ ...rows[0], body: paras.rows.map(p => p.body), ...engagement.rows[0] });
+});
+
+/** Like toggle — same contract as posts. */
+articlesRouter.post('/:id/like', requireMember, async (req, res) => {
+  const del = await q('DELETE FROM article_likes WHERE article_id = $1 AND member_id = $2',
+    [req.params.id, req.member.id]);
+  if (!del.rowCount) {
+    try {
+      await q('INSERT INTO article_likes (article_id, member_id) VALUES ($1, $2)', [req.params.id, req.member.id]);
+    } catch (e) {
+      if (e.code === '23503') return res.status(404).json({ error: 'no such article' });
+      throw e;
+    }
+  }
+  const { rows } = await q('SELECT count(*)::int AS likes FROM article_likes WHERE article_id = $1', [req.params.id]);
+  res.json({ likes: rows[0].likes, liked: !del.rowCount });
+});
+
+articlesRouter.get('/:id/comments', requireMember, async (req, res) => {
+  const { rows } = await q(`
+    SELECT c.id, c.member_id, c.body, c.created_at,
+           m.name AS author_name, m.handle AS author_handle,
+           av.storage_key AS author_avatar_key
+      FROM article_comments c
+      JOIN members m ON m.id = c.member_id
+      LEFT JOIN media av ON av.id = m.avatar_media_id
+     WHERE c.article_id = $1 ORDER BY c.created_at LIMIT 200`, [req.params.id]);
+  res.json({
+    comments: rows.map(c => ({
+      id: c.id, uid: c.member_id, mine: c.member_id === req.member.id,
+      author: { name: c.author_name, handle: c.author_handle,
+        avatar_url: c.author_avatar_key ? `/media/${c.author_avatar_key}` : null },
+      text: c.body, at: c.created_at,
+    })),
+  });
+});
+
+articlesRouter.post('/:id/comments', requireMember, async (req, res) => {
+  const body = String(req.body?.body || '').trim();
+  if (!body) return res.status(400).json({ error: 'body is required' });
+  try {
+    const { rows } = await q(
+      `INSERT INTO article_comments (article_id, member_id, body)
+       VALUES ($1, $2, $3) RETURNING id, created_at`,
+      [req.params.id, req.member.id, body.slice(0, 1000)]);
+    track(req.member.id, 'comment', { article: req.params.id });
+    res.status(201).json({
+      id: rows[0].id, uid: req.member.id, mine: true,
+      author: { name: req.member.name, handle: req.member.handle, avatar_url: null },
+      text: body.slice(0, 1000), at: rows[0].created_at,
+    });
+  } catch (e) {
+    if (e.code === '23503') return res.status(404).json({ error: 'no such article' });
+    throw e;
+  }
+});
+
+/** Your own comment, or admin. */
+articlesRouter.delete('/comments/:id', requireMember, async (req, res) => {
+  const { rowCount } = await q(
+    `DELETE FROM article_comments WHERE id = $1 AND ($2 OR member_id = $3)`,
+    [req.params.id, req.member.is_admin, req.member.id]);
+  if (!rowCount) return res.status(404).json({ error: 'not found' });
+  res.status(204).end();
 });
 
 articlesRouter.post('/', requireMember, requireAdmin, async (req, res) => {

@@ -330,15 +330,18 @@ adminRouter.delete('/members/:id', async (req, res) => {
 
 /* ================================================================== media */
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1 } });
-const IMAGE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 } });
+const MEDIA_EXT = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
+};
 
-/** Covers and hero images. Attributed to the first admin member (Lee). */
+/** Covers, thumbnails and clips for content. Owned by the house account. */
 adminRouter.post('/media', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'no file' });
   const sniffed = await fileTypeFromBuffer(req.file.buffer);
-  const ext = sniffed && IMAGE_EXT[sniffed.mime];
-  if (!ext) return res.status(415).json({ error: 'JPEG, PNG, WebP or GIF only' });
+  const ext = sniffed && MEDIA_EXT[sniffed.mime];
+  if (!ext) return res.status(415).json({ error: 'Images (JPEG, PNG, WebP, GIF) or video (MP4, WebM, MOV) only' });
 
   const owner = await houseMember();
   if (!owner) return res.status(409).json({ error: 'no house member to own the file' });
@@ -548,6 +551,88 @@ adminRouter.patch('/workshops/:id', async (req, res) => {
 
 adminRouter.delete('/workshops/:id', async (req, res) => {
   const { rowCount } = await q('DELETE FROM workshops WHERE id = $1', [req.params.id]);
+  if (!rowCount) return res.status(404).json({ error: 'not found' });
+  res.status(204).end();
+});
+
+/* ================================================================== rooms */
+
+/**
+ * Rooms are created here and only here — Lee's rule: members join rooms,
+ * the club runs them. Hosts named at creation walk on stage as moderators
+ * (routes.rooms.js already grants that to room_speakers on join).
+ */
+adminRouter.get('/rooms', async (_req, res) => {
+  const { rows } = await q(`
+    SELECT r.id, r.title, r.description, r.tag, r.is_live, r.scheduled_for, r.created_at,
+           (SELECT count(*)::int FROM room_participants p WHERE p.room_id = r.id) AS in_room,
+           (SELECT coalesce(json_agg(json_build_object('id', m.id, 'name', m.name) ORDER BY s.ord), '[]'::json)
+              FROM room_speakers s JOIN members m ON m.id = s.member_id
+             WHERE s.room_id = r.id) AS hosts
+      FROM rooms r ORDER BY r.is_live DESC, r.created_at DESC`);
+  res.json({ rooms: rows });
+});
+
+adminRouter.post('/rooms', async (req, res) => {
+  const { title, description, tag = 'Community', scheduled_for, is_live = false, hosts = [] } = req.body || {};
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  if (!PILLARS.includes(tag)) return res.status(400).json({ error: 'bad tag' });
+  const id = contentId(title);
+  await q(
+    `INSERT INTO rooms (id, title, description, tag, is_live, scheduled_for)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [id, title, description || null, tag, !!is_live, scheduled_for || null]
+  );
+  for (const [i, memberId] of [...new Set(hosts.map(String))].slice(0, 6).entries()) {
+    await q(`INSERT INTO room_speakers (room_id, member_id, ord)
+             SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM members WHERE id = $2)
+             ON CONFLICT DO NOTHING`, [id, memberId, i]).catch(() => {});
+  }
+  res.status(201).json({ id });
+});
+
+adminRouter.patch('/rooms/:id', async (req, res) => {
+  const allowed = { title: 'text', description: 'text', is_live: 'bool', scheduled_for: 'text' };
+  const sets = [];
+  const vals = [];
+  for (const [field, kind] of Object.entries(allowed)) {
+    if (!(field in (req.body || {}))) continue;
+    let v = req.body[field];
+    if (kind === 'bool') v = !!v;
+    vals.push(v);
+    sets.push(`${field} = $${vals.length}`);
+  }
+
+  /* Hosts are replaceable after creation — getting them wrong at create
+     time must not require deleting the room. New hosts' publish rights
+     apply on their next join (token minted from room_speakers). */
+  const hosts = Array.isArray(req.body?.hosts) ? req.body.hosts : null;
+
+  if (!sets.length && !hosts) return res.status(400).json({ error: 'nothing to update' });
+
+  if (sets.length) {
+    vals.push(req.params.id);
+    const { rows } = await q(`UPDATE rooms SET ${sets.join(', ')} WHERE id = $${vals.length} RETURNING id`, vals);
+    if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  } else {
+    const exists = await q('SELECT 1 FROM rooms WHERE id = $1', [req.params.id]);
+    if (!exists.rows[0]) return res.status(404).json({ error: 'not found' });
+  }
+
+  if (hosts) {
+    await q('DELETE FROM room_speakers WHERE room_id = $1', [req.params.id]);
+    for (const [i, memberId] of [...new Set(hosts.map(String))].slice(0, 6).entries()) {
+      await q(`INSERT INTO room_speakers (room_id, member_id, ord)
+               SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM members WHERE id = $2)
+               ON CONFLICT DO NOTHING`, [req.params.id, memberId, i]).catch(() => {});
+    }
+  }
+
+  res.json({ ok: true });
+});
+
+adminRouter.delete('/rooms/:id', async (req, res) => {
+  const { rowCount } = await q('DELETE FROM rooms WHERE id = $1', [req.params.id]);
   if (!rowCount) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
 });

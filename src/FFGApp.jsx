@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   Home, Users, Calendar, Banknote, User, Heart, MessageCircle, Share2,
   MapPin, ArrowUpRight, Bell, Search, Bookmark, ChevronRight,
   Zap, TrendingUp, Handshake, Plus, BadgeCheck, ChevronLeft, MoreHorizontal,
   Grid3x3, Award, Mic, Trophy, Briefcase, Quote, Send, X, Bot,
   Radio, Hand, MicOff, LogOut, Clock, CalendarCheck, ArrowRight, Check,
-  Linkedin, Instagram, Globe, Twitter, Rocket, ImagePlus, BookOpen, Ticket, QrCode,
+  Linkedin, Instagram, Globe, Twitter, Rocket, ImagePlus, BookOpen, Ticket, QrCode, Trash2,
   Play, Pause, GraduationCap, Camera
 } from "lucide-react";
 import { useAuth, useClerk } from "@clerk/clerk-react";
@@ -512,8 +513,118 @@ const ProfileTile = ({ tile }) => {
   );
 };
 
-const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat, profile, onProfileSaved }) => {
-  const [following, setFollowing] = useState(false);
+/**
+ * The 3-column media grid — the Instagram read of a member's posts.
+ * Media posts show their picture (video gets a play badge); text posts
+ * become quiet text tiles, so nothing a member shares disappears.
+ */
+const PostGrid = ({ posts, emptyTitle, emptyHint, onOpen }) => {
+  if (!posts) return <div style={{ padding: "34px 18px", textAlign: "center", fontSize: 13, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Loading…</div>;
+  if (!posts.length) {
+    return (
+      <div style={{ padding: "44px 18px", textAlign: "center" }}>
+        <Users size={30} color={T.dim} style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 13.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{emptyTitle}</div>
+        {emptyHint && <div style={{ fontSize: 12, color: T.dim, fontFamily: "'Inter',sans-serif", marginTop: 6 }}>{emptyHint}</div>}
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, padding: 2 }}>
+      {posts.map(p => (
+        <div key={p.id} onClick={() => onOpen(p)} style={{
+          position: "relative", aspectRatio: "1", cursor: "pointer", overflow: "hidden",
+          background: T.card, border: `1px solid ${T.line}`,
+        }}>
+          {p.image_url ? (
+            isVideoUrl(p.image_url) ? (
+              <>
+                <video src={mediaUrl(p.image_url)} muted playsInline preload="metadata"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <div style={{
+                  position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 11,
+                  background: "#000000AA", display: "flex", alignItems: "center", justifyContent: "center",
+                }}><Play size={11} color="#FFF" fill="#FFF" /></div>
+              </>
+            ) : (
+              <img src={mediaUrl(p.image_url)} alt="" loading="lazy"
+                style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            )
+          ) : (
+            <div style={{
+              width: "100%", height: "100%", padding: 8, boxSizing: "border-box",
+              fontSize: 10.5, lineHeight: 1.45, color: T.dim, fontFamily: "'Inter',sans-serif",
+              overflow: "hidden",
+            }}>{p.text}</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/** One post, full-screen — tapped open from a profile grid. Portalled to
+    <body> so the tab bar can never paint over it. Your own posts can be
+    deleted right here — the grid is where members manage their photos. */
+const PostViewer = ({ post, member, openUser, onClose, canDelete, onDeleted }) => {
+  const { getToken } = useAuth();
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentCount, setCommentCount] = useState(post.comments || 0);
+  const destroy = async () => {
+    if (!window.confirm("Delete this post? This can't be undone.")) return;
+    try {
+      await createApi(getToken).deletePost(post.id);
+      onDeleted && onDeleted();
+      onClose();
+    } catch { /* the server said no; the post stays */ }
+  };
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", flexDirection: "column", background: T.ink }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.line}` }}>
+        <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Post</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {canDelete && (
+            <Trash2 size={19} color="#B3261E" style={{ cursor: "pointer" }} onClick={destroy} />
+          )}
+          <X size={22} color={T.cream} style={{ cursor: "pointer" }} onClick={onClose} />
+        </div>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {post.image_url && (
+          isVideoUrl(post.image_url)
+            ? <video src={mediaUrl(post.image_url)} controls playsInline autoPlay muted
+                style={{ width: "100%", maxHeight: "60vh", background: "#000", display: "block" }} />
+            : <img src={mediaUrl(post.image_url)} alt="" style={{ width: "100%", display: "block" }} />
+        )}
+        <div style={{ padding: "16px 18px" }}>
+          <p style={{ margin: "0 0 10px", fontSize: 14.5, lineHeight: 1.55, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{post.text}</p>
+          {post.tags?.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+              {post.tags.map(t => (
+                <span key={t.id} onClick={() => { onClose(); openUser(t.id); }} style={{
+                  fontSize: 12, fontWeight: 600, color: T.connect, cursor: "pointer",
+                  background: `${T.connect}12`, borderRadius: 999, padding: "4px 10px",
+                  fontFamily: "'Inter',sans-serif",
+                }}>with {t.name}</span>
+              ))}
+            </div>
+          )}
+          <LikeRow likes={post.likes} comments={commentCount} liked={post.liked}
+            onToggle={() => createApi(getToken).likePost(post.id)}
+            saved={post.saved} onSave={() => createApi(getToken).savePost(post.id)}
+            onComments={() => setCommentsOpen(true)} />
+          {commentsOpen && (
+            <CommentsSheet postId={post.id} onClose={() => setCommentsOpen(false)} onCount={setCommentCount} />
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat, profile, onProfileSaved, openUser, composeSignal, openConcierge, unreadDMs = 0 }) => {
+  const [following, setFollowing] = useState(!!user.followed_by_me);
   const [gridTab, setGridTab] = useState("grid");
   const [showMenu, setShowMenu] = useState(false);
   const [toast, setToast] = useState(null);
@@ -525,13 +636,44 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
   const [photoErr, setPhotoErr] = useState(null);
   const avatarFileRef = React.useRef(null);
   const { getToken } = useAuth();
+  const { signOut } = useClerk();
+
+  /* The shell's floating button on this tab means "new post" — it bumps
+     composeSignal and the composer opens here. */
+  const composeSeen = React.useRef(composeSignal);
+  useEffect(() => {
+    if (composeSignal !== composeSeen.current) {
+      composeSeen.current = composeSignal;
+      if (user.me) setComposing(true);
+    }
+  }, [composeSignal, user.me]);
+
+  /* The Instagram part: the grid is this member's real posts, the second
+     tab is posts they're tagged in. gridVersion bumps after posting from
+     this page so the new post appears without leaving it. */
+  const [gridPosts, setGridPosts] = useState(null);
+  const [taggedPosts, setTaggedPosts] = useState(null);
+  const [gridVersion, setGridVersion] = useState(0);
+  const [viewingPost, setViewingPost] = useState(null);
+  useEffect(() => {
+    let live = true;
+    const api = createApi(getToken);
+    api.memberPosts(user.id)
+      .then(({ posts }) => { if (live) setGridPosts(posts); })
+      .catch(() => { if (live) setGridPosts([]); });
+    api.memberTagged(user.id)
+      .then(({ posts }) => { if (live) setTaggedPosts(posts); })
+      .catch(() => { if (live) setTaggedPosts([]); });
+    return () => { live = false; };
+  }, [user.id, gridVersion, getToken]);
 
   /** Publish from your own page — same pipeline as the feed composer. */
-  const publishFromProfile = async ({ text, imageKey }) => {
+  const publishFromProfile = async ({ text, imageKey, tags }) => {
     await createApi(getToken).createPost({
-      body: text, pillar: 'Community', image_key: imageKey || undefined,
+      body: text, pillar: 'Community', image_key: imageKey || undefined, tags,
     });
     setToast("Posted to the feed");
+    setGridVersion(v => v + 1); // the grid below should show it immediately
     setTimeout(() => setToast(null), 2600);
   };
   const ex = PROFILE_EXTRAS[user.id] || {};
@@ -576,21 +718,41 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
 
   const act = (label, fn) => { fn && fn(); setShowMenu(false); setToast(label); setTimeout(() => setToast(null), 1800); };
 
+  /* The profile link is a real deep link: the shell reads ?u= on load and
+     opens that member once the directory arrives. */
+  const profileLink = `${window.location.origin}/?u=${encodeURIComponent(user.handle || user.id)}`;
+  const copyLink = () => navigator.clipboard?.writeText(profileLink);
+  const shareLink = () => {
+    if (navigator.share) {
+      navigator.share({ title: `${user.name} on Connect`, url: profileLink }).catch(() => {});
+    } else {
+      copyLink();
+    }
+  };
+
+  const [showSaved, setShowSaved] = useState(false);
+  const [showQr, setShowQr] = useState(false);
+  const [followList, setFollowList] = useState(null); // "Followers" | "Following"
+
   const menuItems = user.me
     ? [
-        { icon: AgentMark, label: "Refresh AI briefing", fn: () => {} },
-        { icon: Bookmark, label: "Saved posts", fn: () => {} },
-        { icon: QrCode, label: "My QR code", fn: () => {} },
-        { icon: Globe, label: "Copy profile link", fn: () => {} },
-        { icon: LogOut, label: "Log out", fn: () => {}, danger: true },
+        { icon: AgentMark, label: "Ask the Concierge", fn: () => openConcierge && openConcierge() },
+        { icon: AgentMark, label: "Refresh AI briefing", done: "Briefing is back on your Home tab",
+          fn: () => writeFlag("ffg.briefing.dismissed", "") },
+        { icon: Bookmark, label: "Saved posts", fn: () => setShowSaved(true) },
+        { icon: QrCode, label: "My QR code", fn: () => setShowQr(true) },
+        { icon: Globe, label: "Copy profile link", fn: copyLink, done: "Link copied" },
+        { icon: LogOut, label: "Log out", danger: true,
+          fn: () => { writeFlag("ffg.entered", ""); signOut(); } },
       ]
     : [
-        { icon: Share2, label: "Share profile", fn: () => {}, done: "Link copied" },
-        { icon: Globe, label: "Copy profile link", fn: () => {}, done: "Link copied" },
-        { icon: Bookmark, label: "Save to my list", fn: () => {}, done: "Saved" },
+        { icon: Share2, label: "Share profile", fn: shareLink, done: navigator.share ? null : "Link copied" },
+        { icon: Globe, label: "Copy profile link", fn: copyLink, done: "Link copied" },
+        { icon: Bookmark, label: "Save to my list", fn: () => createApi(getToken).followMember(user.id).catch(() => {}), done: "Saved — you now follow them" },
         { icon: muted ? Bell : MicOff, label: muted ? "Unmute" : "Mute posts", fn: () => setMuted(m => !m), done: muted ? "Unmuted" : "Muted" },
         { icon: blocked ? Check : X, label: blocked ? "Unblock" : "Block", fn: () => setBlocked(b => !b), done: blocked ? "Unblocked" : "Blocked", danger: !blocked },
-        { icon: Hand, label: "Report", fn: () => {}, done: "Reported to FFG", danger: true },
+        { icon: Hand, label: "Report", danger: true, done: "Reported to the FFG team",
+          fn: () => createApi(getToken).reportMember(user.id, "reported from profile").catch(() => {}) },
       ];
   return (
     <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 30, display: "flex", flexDirection: "column" }}>
@@ -637,7 +799,9 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
           </div>
           <div style={{ flex: 1, display: "flex", justifyContent: "space-around" }}>
             {[[user.posts, "Posts"], [user.followers, "Followers"], [user.following, "Following"]].map(([v, l]) => (
-              <div key={l} style={{ textAlign: "center" }}>
+              <div key={l}
+                onClick={() => (l === "Followers" || l === "Following") && setFollowList(l)}
+                style={{ textAlign: "center", cursor: l === "Posts" ? "default" : "pointer" }}>
                 <div style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 18, color: T.cream }}>{v}</div>
                 <div style={{ fontSize: 12, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{l}</div>
               </div>
@@ -678,23 +842,40 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
 
         {/* actions */}
         <div style={{ display: "flex", gap: 8, padding: "0 18px 14px" }}>
-          {user.me ? (<>
+          {user.me ? (
+            /* One posting CTA on this page — the dashed bar below. */
             <button style={btnGhost()} disabled={!own}
               onClick={() => setEditing(true)}>Edit profile</button>
-            {/* Post straight from your own page — photos and video clips. */}
-            <button style={btnGhost()} disabled={!own}
-              onClick={() => setComposing(true)}><ImagePlus size={15} style={{ marginRight: 6 }} />New post</button>
-          </>) : (<>
-            <button onClick={() => setFollowing(f => !f)} style={{
+          ) : (<>
+            <button onClick={async () => {
+              setFollowing(f => !f); // optimistic; the server corrects us
+              try {
+                const { following: real } = await createApi(getToken).followMember(user.id);
+                setFollowing(real);
+              } catch { setFollowing(f => !f); }
+            }} style={{
               ...btnGhost(),
               background: following ? "transparent" : T.gold,
               border: following ? `1px solid ${T.line}` : "none",
               color: following ? T.cream : T.ink, fontWeight: 700,
             }}>{following ? "Following" : "Follow"}</button>
             <button style={btnGhost()} onClick={() => openChat && openChat(user.id)}>Message</button>
-            <button style={{ ...btnGhost(), flex: 0, padding: "10px 13px" }}><Handshake size={16} /></button>
           </>)}
         </div>
+
+        {/* the unmissable one: share straight from your page */}
+        {user.me && (
+          <div style={{ padding: "0 18px 14px" }}>
+            <button onClick={() => own && setComposing(true)} disabled={!own} style={{
+              width: "100%", padding: "13px 0", borderRadius: 14, cursor: own ? "pointer" : "default",
+              border: `1px dashed ${T.gold}80`, background: `${T.gold}0E`,
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              color: T.gold, fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13.5,
+            }}>
+              <ImagePlus size={17} />Share a photo or video
+            </button>
+          </div>
+        )}
 
         {/* inbox + notifications (own profile) */}
         {user.me && openMessages && (
@@ -706,15 +887,19 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
             }}>
               <div style={{ position: "relative" }}>
                 <MessageCircle size={21} color={T.gold} />
+                {unreadDMs > 0 && (
                 <span style={{
                   position: "absolute", top: -5, right: -7, minWidth: 16, height: 16, borderRadius: 8,
                   background: T.gold, color: T.ink, fontSize: 10, fontWeight: 800, padding: "0 4px",
                   display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter',sans-serif",
-                }}>{THREADS.reduce((s, t) => s + t.unread, 0)}</span>
+                }}>{unreadDMs}</span>
+                )}
               </div>
               <div>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: T.cream, fontFamily: "'Inter',sans-serif" }}>Messages</div>
-                <div style={{ fontSize: 11, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{THREADS.filter(t => t.unread).length} unread chats</div>
+                <div style={{ fontSize: 11, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+                  {unreadDMs > 0 ? `${unreadDMs} unread` : "All read"}
+                </div>
               </div>
             </div>
             <div onClick={openNotifs} style={{
@@ -848,15 +1033,19 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
         </div>
 
         {/* grid */}
-        {gridTab === "grid" ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, padding: 2 }}>
-            {user.tiles.map((t, i) => <ProfileTile key={i} tile={t} />)}
-          </div>
-        ) : (
-          <div style={{ padding: "44px 18px", textAlign: "center" }}>
-            <Users size={30} color={T.dim} style={{ marginBottom: 10 }} />
-            <div style={{ fontSize: 13.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Posts featuring {user.name.split(" ")[0]} appear here.</div>
-          </div>
+        <PostGrid
+          posts={gridTab === "grid" ? gridPosts : taggedPosts}
+          emptyTitle={gridTab === "grid"
+            ? (user.me ? "Nothing here yet" : `${user.name.split(" ")[0]} hasn't posted yet`)
+            : `Posts featuring ${user.name.split(" ")[0]} appear here`}
+          emptyHint={gridTab === "grid" && user.me ? "Tap New post to share your first photo or video." : null}
+          onOpen={setViewingPost}
+        />
+        {viewingPost && (
+          <PostViewer post={viewingPost} member={member} openUser={openUser ?? (() => {})}
+            canDelete={viewingPost.uid === profile?.id}
+            onDeleted={() => setGridVersion(v => v + 1)}
+            onClose={() => setViewingPost(null)} />
         )}
         <div style={{ height: 90 }} />
       </div>
@@ -872,7 +1061,7 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
           }}>
             <div style={{ width: 40, height: 4, borderRadius: 2, background: T.line, margin: "8px auto 12px" }} />
             <div style={{ padding: "0 16px 8px", fontFamily: "'Inter',sans-serif", fontSize: 13, color: T.dim, textAlign: "center" }}>
-              {user.me ? "Account" : `@${user.handle}`}
+              {user.me ? <>Account · <span style={{ opacity: 0.7 }}>build {typeof __BUILD_STAMP__ !== "undefined" ? __BUILD_STAMP__ : "dev"}</span></> : `@${user.handle}`}
             </div>
             {menuItems.map(item => {
               const Ico = item.icon;
@@ -938,7 +1127,138 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
         <Composer member={{ name: profile.name }} onClose={() => setComposing(false)}
           onPost={publishFromProfile} />
       )}
+
+      {/* Saved posts — the bookmark list, straight from the server. */}
+      {showSaved && (
+        <SavedSheet onClose={() => setShowSaved(false)} onOpen={p => { setShowSaved(false); setViewingPost(p); }} />
+      )}
+
+      {/* My QR code — the deep link, scannable. */}
+      {showQr && <QrSheet name={user.name} link={profileLink} onClose={() => setShowQr(false)} />}
+
+      {/* Followers / Following — the IG tap-through */}
+      {followList && (
+        <FollowListSheet userId={user.id} kind={followList}
+          onClose={() => setFollowList(null)}
+          onOpen={(id) => { setFollowList(null); openUser && openUser(id); }} />
+      )}
     </div>
+  );
+};
+
+/** Who follows / who they follow — tappable rows, straight to profiles. */
+const FollowListSheet = ({ userId, kind, onClose, onOpen }) => {
+  const { getToken } = useAuth();
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    let live = true;
+    const api = createApi(getToken);
+    (kind === "Followers" ? api.followers(userId) : api.following(userId))
+      .then(({ members }) => { if (live) setRows(members); })
+      .catch(() => { if (live) setRows([]); });
+    return () => { live = false; };
+  }, [userId, kind, getToken]);
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "#00000090", backdropFilter: "blur(3px)" }} />
+      <div style={{
+        position: "relative", background: T.ink2, borderRadius: "22px 22px 0 0",
+        border: `1px solid ${T.line}`, borderBottom: "none",
+        height: "62dvh", display: "flex", flexDirection: "column",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 18px 10px", flexShrink: 0 }}>
+          <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 16, color: T.cream }}>
+            {kind}{rows ? ` · ${rows.length}` : ""}
+          </span>
+          <X size={22} color={T.dim} style={{ cursor: "pointer" }} onClick={onClose} />
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 18px calc(14px + env(safe-area-inset-bottom))" }}>
+          {!rows && <div style={{ padding: 20, textAlign: "center", fontSize: 13, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Loading…</div>}
+          {rows && !rows.length && (
+            <div style={{ padding: "30px 10px", textAlign: "center", fontSize: 13, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+              {kind === "Followers" ? "No followers yet." : "Not following anyone yet."}
+            </div>
+          )}
+          {(rows || []).map(m => (
+            <div key={m.id} onClick={() => onOpen(m.id)} style={{
+              display: "flex", alignItems: "center", gap: 12, padding: "11px 0",
+              borderBottom: `1px solid ${T.line}`, cursor: "pointer",
+            }}>
+              <Avatar initials={m.id} src={m.avatar_url ? mediaUrl(m.avatar_url) : null} size={42} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14, color: T.cream }}>{m.name}</span>
+                  {m.verified && <BadgeCheck size={14} color={T.gold} />}
+                </div>
+                <div style={{ fontSize: 12, color: T.dim, fontFamily: "'Inter',sans-serif", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  @{m.handle}{m.role ? ` · ${m.role}` : ""}
+                </div>
+              </div>
+              <PillarTag name={m.pillar} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const SavedSheet = ({ onClose, onOpen }) => {
+  const { getToken } = useAuth();
+  const [posts, setPosts] = useState(null);
+  useEffect(() => {
+    let live = true;
+    createApi(getToken).savedPosts()
+      .then(({ posts }) => { if (live) setPosts(posts); })
+      .catch(() => { if (live) setPosts([]); });
+    return () => { live = false; };
+  }, [getToken]);
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: T.ink, display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.line}` }}>
+        <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Saved posts</span>
+        <X size={22} color={T.cream} style={{ cursor: "pointer" }} onClick={onClose} />
+      </div>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        <PostGrid posts={posts} emptyTitle="Nothing saved yet"
+          emptyHint="Tap the bookmark on any post to keep it here." onOpen={onOpen} />
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const QrSheet = ({ name, link, onClose }) => {
+  const [dataUrl, setDataUrl] = useState(null);
+  useEffect(() => {
+    let live = true;
+    import("qrcode").then(QR =>
+      QR.toDataURL(link, { width: 480, margin: 1, color: { dark: "#17171B", light: "#F7F4EE" } })
+        .then(url => { if (live) setDataUrl(url); })
+    ).catch(() => {});
+    return () => { live = false; };
+  }, [link]);
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "#000000C0", backdropFilter: "blur(4px)" }} />
+      <div style={{
+        position: "relative", background: T.ink2, borderRadius: 22, border: `1px solid ${T.line}`,
+        padding: 26, textAlign: "center", width: "min(82vw, 320px)",
+      }}>
+        <div style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 17, color: T.cream, marginBottom: 4 }}>{name}</div>
+        <div style={{ fontSize: 11.5, color: T.dim, fontFamily: "'Inter',sans-serif", marginBottom: 16 }}>Scan to open this profile in Connect</div>
+        {dataUrl
+          ? <img src={dataUrl} alt="Profile QR code" style={{ width: "100%", borderRadius: 14, border: `1px solid ${T.line}` }} />
+          : <div style={{ padding: 40, fontSize: 12.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Generating…</div>}
+        <button onClick={onClose} style={{
+          marginTop: 16, width: "100%", padding: "12px 0", borderRadius: 999, border: `1px solid ${T.line}`,
+          background: "transparent", color: T.cream, cursor: "pointer",
+          fontFamily: "'Inter',sans-serif", fontWeight: 600, fontSize: 13.5,
+        }}>Close</button>
+      </div>
+    </div>,
+    document.body
   );
 };
 
@@ -1084,15 +1404,22 @@ const ArticleReader = ({ article, onBack, openUser }) => {
   /* The shelf list travels light — the full text arrives when the reader
      opens. (This is also what records the read for the admin charts.) */
   const [body, setBody] = useState(article.body);
+  const [meta, setMeta] = useState(null);          // { likes, liked, comments }
+  const [commentsOpen, setCommentsOpen] = useState(false);
   useEffect(() => {
-    if (article.body) return;
     let live = true;
     createApi(getToken).getArticle(article.id)
-      .then(full => { if (live) setBody(full.body || []); })
-      .catch(() => { if (live) setBody([]); });
+      .then(full => { if (live) { setBody(full.body || []); setMeta({ likes: full.likes || 0, liked: !!full.liked, comments: full.comments || 0 }); } })
+      .catch(() => { if (live) { setBody(b => b || []); setMeta({ likes: 0, liked: false, comments: 0 }); } });
     return () => { live = false; };
-  }, [article.id, article.body, getToken]);
+  }, [article.id, getToken]);
   article = { ...article, body: body || [] };
+
+  const shareArticle = () => {
+    const link = `${window.location.origin}/?a=${encodeURIComponent(article.id)}`;
+    if (navigator.share) navigator.share({ title: article.title, url: link }).catch(() => {});
+    else navigator.clipboard?.writeText(link);
+  };
   return (
     <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 30, display: "flex", flexDirection: "column" }}>
       <div style={{
@@ -1102,7 +1429,7 @@ const ArticleReader = ({ article, onBack, openUser }) => {
       }}>
         <ChevronLeft size={24} color={T.cream} style={{ cursor: "pointer" }} onClick={onBack} />
         <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Article</span>
-        <Bookmark size={20} color={T.cream} />
+        <Share2 size={19} color={T.cream} style={{ cursor: "pointer" }} onClick={shareArticle} />
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {article.image && (
@@ -1144,7 +1471,16 @@ const ArticleReader = ({ article, onBack, openUser }) => {
           ))}
         </div>
         <div style={{ padding: "0 20px 30px" }}>
-          <LikeRow likes={article.ai ? 0 : 120 + article.title.length} comments={article.ai ? 0 : 18} />
+          {/* real engagement — the demo's invented numbers are gone */}
+          {meta && (
+            <LikeRow likes={meta.likes} comments={meta.comments} liked={meta.liked}
+              onToggle={() => createApi(getToken).likeArticle(article.id)}
+              onComments={() => setCommentsOpen(true)} />
+          )}
+          {commentsOpen && (
+            <CommentsSheet articleId={article.id} onClose={() => setCommentsOpen(false)}
+              onCount={(n) => setMeta(m => m ? { ...m, comments: n } : m)} />
+          )}
         </div>
         <div style={{ height: 80 }} />
       </div>
@@ -1758,8 +2094,8 @@ const ChatView = ({ uid, onBack, openUser }) => {
       setInput(text);
     }
   };
-  return (
-    <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 36, display: "flex", flexDirection: "column" }}>
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, background: T.ink, zIndex: 995, display: "flex", flexDirection: "column" }}>
       <div style={{
         display: "flex", alignItems: "center", gap: 11,
         padding: "12px 14px", borderBottom: `1px solid ${T.line}`,
@@ -1810,7 +2146,8 @@ const ChatView = ({ uid, onBack, openUser }) => {
           display: "flex", alignItems: "center", justifyContent: "center",
         }}><Send size={18} color={T.ink} /></button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -1830,8 +2167,8 @@ const MessagesScreen = ({ onBack, openChat, openUser }) => {
     return () => { live = false; clearInterval(poll); };
   }, [getToken]);
 
-  return (
-    <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 35, display: "flex", flexDirection: "column" }}>
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, background: T.ink, zIndex: 990, display: "flex", flexDirection: "column" }}>
       {overlayTopBar("Messages", onBack)}
       <div style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
         {(threads || []).map(t => (
@@ -1872,7 +2209,8 @@ const MessagesScreen = ({ onBack, openChat, openUser }) => {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -2192,7 +2530,16 @@ const AIBriefing = ({ openConcierge, member }) => {
   );
 };
 
-const LikeRow = ({ likes, comments, liked: likedInitial = false, onToggle }) => {
+const LikeRow = ({ likes, comments, liked: likedInitial = false, onToggle, saved: savedInitial = false, onSave, onComments }) => {
+  const [saved, setSaved] = useState(savedInitial);
+  const toggleSave = async () => {
+    if (!onSave) return;
+    setSaved(s => !s);
+    try {
+      const res = await onSave();
+      setSaved(res.saved);
+    } catch { setSaved(savedInitial); }
+  };
   /* Optimistic: flip locally, then let the server's answer correct us. A
      like that fails simply un-flips. */
   const [liked, setLiked] = useState(likedInitial);
@@ -2221,10 +2568,15 @@ const LikeRow = ({ likes, comments, liked: likedInitial = false, onToggle }) => 
           style={{ transform: liked ? "scale(1.15)" : "none", transition: "transform 0.2s cubic-bezier(.3,1.6,.5,1)" }} />
         {count}
       </span>
-      <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontFamily: "'Inter',sans-serif" }}>
+      <span onClick={onComments} style={{
+        display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontFamily: "'Inter',sans-serif",
+        cursor: onComments ? "pointer" : "default",
+      }}>
         <MessageCircle size={19} strokeWidth={2} />{comments}</span>
       <Share2 size={18} strokeWidth={2} />
-      <Bookmark size={18} strokeWidth={2} style={{ marginLeft: "auto" }} />
+      <Bookmark size={18} strokeWidth={2} onClick={toggleSave}
+        color={saved ? T.gold : T.dim} fill={saved ? T.gold : "none"}
+        style={{ marginLeft: "auto", cursor: onSave ? "pointer" : "default", transition: "color 0.15s" }} />
     </div>
   );
 };
@@ -2327,10 +2679,27 @@ const SuggestedStrip = ({ openUser, selfId }) => {
   );
 };
 
-const Post = ({ p, openUser, member }) => {
+const Post = ({ p, openUser, member, onDeleted }) => {
   const { getToken } = useAuth();
   const u = p.me ? null : USERS[p.uid];
   const name = p.me ? (member?.name || "You") : (u?.name || p.uid);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentCount, setCommentCount] = useState(p.comments || 0);
+  const [ownMenu, setOwnMenu] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(p.text);
+  const [gone, setGone] = useState(false);
+  if (gone) return null;
+
+  const destroy = async () => {
+    setOwnMenu(false);
+    if (!window.confirm("Delete this post? This can't be undone.")) return;
+    try {
+      await createApi(getToken).deletePost(p.id);
+      setGone(true);
+      onDeleted && onDeleted(p.id);
+    } catch { /* still there; the server said no */ }
+  };
   return (
     <div style={{ padding: "16px 18px", borderBottom: `1px solid ${T.line}` }}>
       <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 11 }}>
@@ -2343,9 +2712,30 @@ const Post = ({ p, openUser, member }) => {
           <span style={{ fontSize: 12, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{p.time} ago</span>
         </div>
         <PillarTag name={p.pillar} />
+        {p.me && p.id && (
+          <div style={{ position: "relative" }}>
+            <MoreHorizontal size={18} color={T.dim} style={{ cursor: "pointer" }} onClick={() => setOwnMenu(m => !m)} />
+            {ownMenu && (
+              <div style={{
+                position: "absolute", right: 0, top: 24, zIndex: 5, minWidth: 130,
+                background: T.ink2, border: `1px solid ${T.line}`, borderRadius: 12,
+                boxShadow: "0 8px 26px #00000030", overflow: "hidden",
+              }}>
+                <div onClick={() => { setOwnMenu(false); setEditing(true); }} style={{
+                  padding: "11px 15px", fontSize: 13.5, color: T.cream, cursor: "pointer",
+                  fontFamily: "'Inter',sans-serif", fontWeight: 600,
+                }}>Edit post</div>
+                <div onClick={destroy} style={{
+                  padding: "11px 15px", fontSize: 13.5, color: "#B3261E", cursor: "pointer",
+                  fontFamily: "'Inter',sans-serif", fontWeight: 600, borderTop: `1px solid ${T.line}`,
+                }}>Delete post</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      <p style={{ margin: "0 0 12px", fontFamily: "'Inter',sans-serif", fontSize: 14.5, lineHeight: 1.55, color: T.cream }}>{p.text}</p>
+      <p style={{ margin: "0 0 12px", fontFamily: "'Inter',sans-serif", fontSize: 14.5, lineHeight: 1.55, color: T.cream }}>{text}</p>
 
       {/* imageUrl is a member upload served from /media; image is a stock key */}
       {(p.imageUrl || p.image) && (
@@ -2356,6 +2746,19 @@ const Post = ({ p, openUser, member }) => {
           ) : (
             <img src={p.imageUrl || EVENT_PICS[p.image] || p.image} alt="" style={{ width: "100%", display: "block" }} />
           )}
+        </div>
+      )}
+
+      {/* tagged people — Instagram's "with" line */}
+      {p.tags?.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+          {p.tags.map(t => (
+            <span key={t.id} onClick={() => openUser(t.id)} style={{
+              fontSize: 12, fontWeight: 600, color: T.connect, cursor: "pointer",
+              background: `${T.connect}12`, borderRadius: 999, padding: "4px 10px",
+              fontFamily: "'Inter',sans-serif",
+            }}>with {t.name}</span>
+          ))}
         </div>
       )}
 
@@ -2383,8 +2786,17 @@ const Post = ({ p, openUser, member }) => {
         </div>
       )}
 
-      <LikeRow likes={p.likes} comments={p.comments} liked={p.liked}
-        onToggle={p.id ? () => createApi(getToken).likePost(p.id) : null} />
+      <LikeRow likes={p.likes} comments={commentCount} liked={p.liked}
+        onToggle={p.id ? () => createApi(getToken).likePost(p.id) : null}
+        saved={p.saved} onSave={p.id ? () => createApi(getToken).savePost(p.id) : null}
+        onComments={p.id ? () => setCommentsOpen(true) : null} />
+
+      {commentsOpen && (
+        <CommentsSheet postId={p.id} onClose={() => setCommentsOpen(false)} onCount={setCommentCount} />
+      )}
+      {editing && (
+        <EditPostSheet post={{ id: p.id, text }} onClose={() => setEditing(false)} onSaved={setText} />
+      )}
     </div>
   );
 };
@@ -2393,6 +2805,9 @@ const Composer = ({ member, onPost, onClose }) => {
   const [text, setText] = useState("");
   const [pic, setPic] = useState(null);          // stock image key
   const [upload, setUpload] = useState(null);    // { url, id } once stored
+  const [tagged, setTagged] = useState([]);      // member ids tagged in this post
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  const [postState, setPostState] = useState("idle"); // idle | posting | done | error
   const [preview, setPreview] = useState(null);  // local object URL, shown instantly
   const [isVid, setIsVid] = useState(false);     // the preview is a video
   const [busy, setBusy] = useState(false);
@@ -2439,17 +2854,24 @@ const Composer = ({ member, onPost, onClose }) => {
 
   const canPost = (text.trim() || pic || upload) && !busy;
 
-  return (
-    <div style={{ position: "absolute", inset: 0, zIndex: 45, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+  return createPortal(
+    /* A portal to <body>: rendered inside the profile screen this sheet was
+       trapped under that screen's stacking context, and the bottom tab bar
+       painted OVER the Post button — invisible, unpressable. From <body>,
+       position:fixed, nothing outranks it. The Post button lives in a pinned
+       footer, so it can never fall off the bottom of a phone either. */
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
       <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "#00000090", backdropFilter: "blur(3px)" }} />
       <div style={{
         position: "relative", background: T.ink2, borderRadius: "22px 22px 0 0",
-        border: `1px solid ${T.line}`, borderBottom: "none", padding: "18px 18px calc(18px + env(safe-area-inset-bottom))",
+        border: `1px solid ${T.line}`, borderBottom: "none",
+        maxHeight: "88dvh", display: "flex", flexDirection: "column",
       }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 18px 12px", flexShrink: 0 }}>
           <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 16, color: T.cream }}>New post</span>
           <X size={22} color={T.dim} style={{ cursor: "pointer" }} onClick={onClose} />
         </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 18px", WebkitOverflowScrolling: "touch" }}>
         <div style={{ display: "flex", gap: 11, marginBottom: 14 }}>
           <Avatar initials="LA" size={40} />
           <textarea value={text} onChange={e => setText(e.target.value)} rows={3} autoFocus
@@ -2507,7 +2929,7 @@ const Composer = ({ member, onPost, onClose }) => {
             display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
             color: T.gold, fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13.5,
           }}>
-            <ImagePlus size={17} />Upload from your device
+            <ImagePlus size={17} />Add a photo or video
           </button>
         )}
 
@@ -2533,26 +2955,245 @@ const Composer = ({ member, onPost, onClose }) => {
             </div>
           ))}
         </div>
+        {/* Tag people — Instagram's "with". Chips toggle; capped at 10. */}
+        <div style={{ marginBottom: 12 }}>
+          <button onClick={() => setShowTagPicker(s => !s)} style={{
+            border: `1px solid ${tagged.length ? T.gold : T.line}`, background: tagged.length ? `${T.gold}12` : "transparent",
+            borderRadius: 999, padding: "8px 14px", cursor: "pointer",
+            fontFamily: "'Inter',sans-serif", fontWeight: 600, fontSize: 12.5,
+            color: tagged.length ? T.goldSoft : T.dim,
+          }}>
+            {tagged.length
+              ? `With ${tagged.map(id => USERS[id]?.name?.split(" ")[0] || id).join(", ")}`
+              : "Tag people"}
+          </button>
+          {showTagPicker && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 9 }}>
+              {Object.values(USERS).filter(u => u.id !== member?.id).map(u => {
+                const on = tagged.includes(u.id);
+                return (
+                  <button key={u.id}
+                    onClick={() => setTagged(t => on ? t.filter(x => x !== u.id) : t.length < 10 ? [...t, u.id] : t)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+                      border: `1px solid ${on ? T.gold : T.line}`, background: on ? `${T.gold}14` : T.card,
+                      borderRadius: 999, padding: "5px 11px 5px 5px",
+                      fontFamily: "'Inter',sans-serif", fontWeight: 600, fontSize: 12,
+                      color: on ? T.goldSoft : T.cream,
+                    }}>
+                    <Avatar initials={u.id} src={u.avatar_url} size={22} />
+                    {u.name.split(" ")[0]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        </div>{/* end scrollable body */}
+
+        {/* pinned footer — always on screen */}
+        <div style={{ padding: "12px 18px calc(16px + env(safe-area-inset-bottom))", borderTop: `1px solid ${T.line}`, flexShrink: 0, background: T.ink2 }}>
+        {postState === "error" && (
+          <div style={{
+            marginBottom: 12, padding: "9px 12px", borderRadius: 10, fontSize: 12.5,
+            fontFamily: "'Inter',sans-serif", lineHeight: 1.45,
+            background: "rgba(200,60,60,0.10)", border: "1px solid rgba(200,60,60,0.35)", color: "#B4483F",
+          }}>That didn't post. Check your connection and try again.</div>
+        )}
         <button
-          disabled={!canPost}
-          onClick={() => {
-            /* The parent talks to the API; this sheet only hands over the
-               words and the storage key of the uploaded image. */
-            onPost({
-              text: text.trim() || "📸",
-              imageKey: upload?.url ? upload.url.replace(/^.*\/media\//, "") : null,
-            });
-            onClose();
+          disabled={!canPost || postState === "posting" || postState === "done"}
+          onClick={async () => {
+            /* The parent talks to the API; this sheet hands over the words,
+               the storage key of the uploaded media, and the tags — then
+               waits, so the member sees it land rather than hoping. */
+            setPostState("posting");
+            try {
+              await onPost({
+                text: text.trim() || "📸",
+                imageKey: upload?.url ? upload.url.replace(/^.*\/media\//, "") : null,
+                tags: tagged,
+              });
+              setPostState("done");
+              setTimeout(onClose, 900); // long enough to read "Posted ✓"
+            } catch {
+              setPostState("error");
+            }
           }}
           style={{
             width: "100%", padding: "15px 0", borderRadius: 999, border: "none",
-            cursor: canPost ? "pointer" : "default",
-            background: canPost ? `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})` : T.card,
-            color: canPost ? T.ink : T.dim,
+            cursor: canPost && postState === "idle" ? "pointer" : "default",
+            background: postState === "done"
+              ? T.community
+              : canPost ? `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})` : T.card,
+            color: canPost || postState === "done" ? "#FFF" : T.dim,
             fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14.5,
-          }}>{busy ? "Uploading…" : "Post to the feed"}</button>
+            transition: "background 0.25s",
+          }}>
+          {busy ? "Uploading media…"
+            : postState === "posting" ? "Posting…"
+            : postState === "done" ? "Posted ✓"
+            : postState === "error" ? "Try again"
+            : "Post to the feed"}
+        </button>
+        </div>{/* end pinned footer */}
       </div>
-    </div>
+    </div>,
+    document.body
+  );
+};
+
+/**
+ * Comments on one post. A portal sheet: list scrolls, the input is pinned.
+ * Deleting is offered on your own comments (and any comment under your own
+ * post — your page, your rules; the API enforces the same).
+ */
+const CommentsSheet = ({ postId, articleId, onClose, onCount }) => {
+  const { getToken } = useAuth();
+  const [comments, setComments] = useState(null);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const scrollRef = React.useRef(null);
+
+  /* One sheet, two homes: post comments and article comments share the
+     exact same contract, so the only difference is which endpoints. */
+  const io = React.useMemo(() => {
+    const api = createApi(getToken);
+    return articleId
+      ? { load: () => api.articleComments(articleId), add: (t) => api.addArticleComment(articleId, t), del: (id) => api.deleteArticleComment(id) }
+      : { load: () => api.listComments(postId), add: (t) => api.addComment(postId, t), del: (id) => api.deleteComment(id) };
+  }, [postId, articleId, getToken]);
+
+  useEffect(() => {
+    let live = true;
+    io.load()
+      .then(({ comments }) => { if (live) { setComments(comments); onCount?.(comments.length); } })
+      .catch(() => { if (live) setComments([]); });
+    return () => { live = false; };
+  }, [io]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [comments]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    try {
+      const created = await io.add(text);
+      setComments(c => { const next = [...(c || []), created]; onCount?.(next.length); return next; });
+      setInput("");
+    } catch { /* the words stay in the box */ }
+    setBusy(false);
+  };
+
+  const remove = async (id) => {
+    try {
+      await io.del(id);
+      setComments(c => { const next = c.filter(x => x.id !== id); onCount?.(next.length); return next; });
+    } catch { /* row stays if the server said no */ }
+  };
+
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "#00000090", backdropFilter: "blur(3px)" }} />
+      <div style={{
+        position: "relative", background: T.ink2, borderRadius: "22px 22px 0 0",
+        border: `1px solid ${T.line}`, borderBottom: "none",
+        height: "70dvh", display: "flex", flexDirection: "column",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 18px 10px", flexShrink: 0 }}>
+          <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 16, color: T.cream }}>
+            Comments{comments ? ` · ${comments.length}` : ""}
+          </span>
+          <X size={22} color={T.dim} style={{ cursor: "pointer" }} onClick={onClose} />
+        </div>
+        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "4px 18px" }}>
+          {!comments && <div style={{ padding: 20, textAlign: "center", fontSize: 13, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Loading…</div>}
+          {comments && !comments.length && (
+            <div style={{ padding: "30px 10px", textAlign: "center", fontSize: 13, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+              No comments yet — say something first.
+            </div>
+          )}
+          {(comments || []).map(c => (
+            <div key={c.id} style={{ display: "flex", gap: 10, padding: "9px 0", borderBottom: `1px solid ${T.line}` }}>
+              <Avatar initials={c.uid} src={c.author.avatar_url ? mediaUrl(c.author.avatar_url) : null} size={32} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: T.cream, fontFamily: "'Inter',sans-serif", marginRight: 7 }}>{c.author.name}</span>
+                <span style={{ fontSize: 11, color: T.dim, fontFamily: "'Inter',sans-serif" }}>{sinceLabel(c.at)}</span>
+                <div style={{ fontSize: 13.5, lineHeight: 1.5, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{c.text}</div>
+              </div>
+              {c.mine && (
+                <X size={15} color={T.dim} style={{ cursor: "pointer", flexShrink: 0, marginTop: 3 }} onClick={() => remove(c.id)} />
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 9, padding: "10px 18px calc(14px + env(safe-area-inset-bottom))", borderTop: `1px solid ${T.line}`, flexShrink: 0, background: T.ink2 }}>
+          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()}
+            placeholder="Add a comment…" style={{
+              flex: 1, padding: "12px 15px", borderRadius: 999, outline: "none",
+              background: T.card, border: `1px solid ${T.line}`, color: T.cream,
+              fontSize: 14, fontFamily: "'Inter',sans-serif",
+            }} />
+          <button onClick={send} disabled={!input.trim() || busy} style={{
+            padding: "0 18px", borderRadius: 999, border: "none",
+            cursor: input.trim() && !busy ? "pointer" : "default",
+            background: input.trim() ? `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})` : T.card,
+            color: input.trim() ? "#FFF" : T.dim,
+            fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 13.5,
+          }}>{busy ? "…" : "Post"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+/** Edit your own post's words — media stays as posted. */
+const EditPostSheet = ({ post, onClose, onSaved }) => {
+  const { getToken } = useAuth();
+  const [text, setText] = useState(post.text);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    const body = text.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    try {
+      await createApi(getToken).updatePost(post.id, body);
+      onSaved(body);
+      onClose();
+    } catch { setBusy(false); }
+  };
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "#00000090", backdropFilter: "blur(3px)" }} />
+      <div style={{
+        position: "relative", background: T.ink2, borderRadius: "22px 22px 0 0",
+        border: `1px solid ${T.line}`, borderBottom: "none",
+        padding: "18px 18px calc(18px + env(safe-area-inset-bottom))",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 700, fontSize: 16, color: T.cream }}>Edit post</span>
+          <X size={22} color={T.dim} style={{ cursor: "pointer" }} onClick={onClose} />
+        </div>
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={4} autoFocus style={{
+          width: "100%", padding: "12px 14px", borderRadius: 14, outline: "none", resize: "none",
+          background: T.card, border: `1px solid ${T.line}`, color: T.cream,
+          fontSize: 14.5, lineHeight: 1.5, fontFamily: "'Inter',sans-serif", boxSizing: "border-box",
+          marginBottom: 14,
+        }} />
+        <button onClick={save} disabled={!text.trim() || busy} style={{
+          width: "100%", padding: "15px 0", borderRadius: 999, border: "none",
+          cursor: text.trim() && !busy ? "pointer" : "default",
+          background: text.trim() ? `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})` : T.card,
+          color: text.trim() ? "#FFF" : T.dim,
+          fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14.5,
+        }}>{busy ? "Saving…" : "Save changes"}</button>
+      </div>
+    </div>,
+    document.body
   );
 };
 
@@ -2568,7 +3209,7 @@ const shapeFeedPost = (p, myId) => ({
   id: p.id, uid: p.uid, me: p.uid === myId,
   time: sinceLabel(p.posted_at), pillar: p.pillar, text: p.text,
   imageUrl: p.image_url ? mediaUrl(p.image_url) : null, image: null,
-  likes: p.likes, liked: p.liked, comments: 0, stat: p.stat,
+  likes: p.likes, liked: p.liked, saved: p.saved, comments: 0, stat: p.stat, tags: p.tags || [],
 });
 
 const Feed = ({ openUser, openConcierge, openRoom, member }) => {
@@ -2584,9 +3225,9 @@ const Feed = ({ openUser, openConcierge, openRoom, member }) => {
     return () => { live = false; };
   }, [getToken, member?.id]);
 
-  const publish = async ({ text, imageKey }) => {
+  const publish = async ({ text, imageKey, tags }) => {
     const created = await createApi(getToken).createPost({
-      body: text, pillar: 'Community', image_key: imageKey || undefined,
+      body: text, pillar: 'Community', image_key: imageKey || undefined, tags,
     });
     setPosts(prev => [shapeFeedPost(created, member?.id), ...(prev || [])]);
   };
@@ -3216,7 +3857,44 @@ export default function FFGApp() {
   const [showNotifs, setShowNotifs] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [concierge, setConcierge] = useState(false);
+  // Bumped by the floating button on the You tab; UserProfile opens its composer.
+  const [composeSignal, setComposeSignal] = useState(0);
+
+  /**
+   * Unread DMs, polled quietly. Without this a message can sit for days
+   * with the recipient none the wiser — this feeds the inbox badge and a
+   * dot on the You tab.
+   */
+  const [unreadDMs, setUnreadDMs] = useState(0);
+  useEffect(() => {
+    if (!isSignedIn || !profile) return;
+    let live = true;
+    const check = () => createApi(getToken).listThreads()
+      .then(({ threads }) => { if (live) setUnreadDMs(threads.reduce((s, t) => s + (t.unread || 0), 0)); })
+      .catch(() => {});
+    check();
+    const t = setInterval(check, 30_000);
+    return () => { live = false; clearInterval(t); };
+  }, [isSignedIn, profile, getToken]);
   const openUser = uid => setViewUser(uid);
+
+  /* ?u=<handle> deep links (profile links, QR codes) resolve here once the
+     directory has arrived. One shot, then the URL is cleaned. */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const wantedUser = params.get("u");
+    const wantedArticle = params.get("a");
+    if (wantedUser && Object.keys(USERS).length) {
+      const match = Object.values(USERS).find(u => u.handle === wantedUser || u.id === wantedUser);
+      if (match) setViewUser(match.id);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    if (wantedArticle && ARTICLES.length) {
+      const art = ARTICLES.find(x => x.id === wantedArticle);
+      if (art) setViewArticle(art);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  });
 
   // The rail is app chrome, so it only appears once the member is actually
   // inside — never behind the splash, onboarding or sign-in overlays.
@@ -3294,8 +3972,11 @@ export default function FFGApp() {
                   directory entry contributes only decorations if present. */}
               <UserProfile
                 user={{ highlights: [], tiles: [], ...(USERS[profile.id] || {}), id: profile.id, me: true }}
-                onBack={null} member={member}
+                onBack={null} member={member} openUser={openUser}
                 profile={profile} onProfileSaved={setProfile}
+                composeSignal={composeSignal}
+                unreadDMs={unreadDMs}
+                openConcierge={() => setConcierge(true)}
                 openMessages={() => setShowMessages(true)} openNotifs={() => setShowNotifs(true)} />
             </div>
           )}
@@ -3345,20 +4026,29 @@ export default function FFGApp() {
         )}
 
         {/* visiting another member's profile */}
-        {viewUser && USERS[viewUser] && <UserProfile user={USERS[viewUser]} onBack={() => setViewUser(null)} member={member} openChat={uid => { setViewUser(null); setChatWith(uid); }} />}
+        {viewUser && USERS[viewUser] && <UserProfile user={USERS[viewUser]} onBack={() => setViewUser(null)} member={member} openUser={openUser} openChat={uid => { setViewUser(null); setChatWith(uid); }} />}
 
         {/* AI concierge — floating direct line to the group */}
-        {!concierge && entered && member && (
-          <button onClick={() => setConcierge(true)} style={{
-            position: "absolute",
-            bottom: showRail ? 26 : "calc(96px + env(safe-area-inset-bottom))",
-            right: 18, zIndex: 42,
-            width: 56, height: 56, borderRadius: "50%", border: `1px solid ${T.goldSoft}`, cursor: "pointer",
-            background: `linear-gradient(135deg, ${T.gold}, ${T.goldSoft})`,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            boxShadow: `0 6px 24px ${T.gold}50`,
-          }}>
-            <AgentMark size={26} color={T.ink} strokeWidth={2.2} />
+        {/* The floating button earns its keep per tab: everywhere it is the
+            Concierge, but on your own page it is the New post CTA — the
+            Concierge moves into that page's ⋯ menu. Signed-in members only:
+            it has no business floating over the sign-in gate. */}
+        {!concierge && entered && member && isSignedIn && profile && (
+          <button
+            onClick={() => tab === "profile" ? setComposeSignal(s => s + 1) : setConcierge(true)}
+            aria-label={tab === "profile" ? "New post" : "Ask the Concierge"}
+            style={{
+              position: "absolute",
+              bottom: showRail ? 26 : "calc(96px + env(safe-area-inset-bottom))",
+              right: 18, zIndex: 42,
+              width: 56, height: 56, borderRadius: "50%", border: `1px solid ${T.goldSoft}`, cursor: "pointer",
+              background: `linear-gradient(135deg, ${T.gold}, ${T.goldSoft})`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              boxShadow: `0 6px 24px ${T.gold}50`,
+            }}>
+            {tab === "profile"
+              ? <ImagePlus size={24} color={T.ink} strokeWidth={2.2} />
+              : <AgentMark size={26} color={T.ink} strokeWidth={2.2} />}
           </button>
         )}
         {concierge && <Concierge onClose={() => setConcierge(false)} />}
@@ -3377,8 +4067,14 @@ export default function FFGApp() {
               <button key={t.id} onClick={() => { setTab(t.id); resetViews(); }} style={{
                 background: "none", border: "none", cursor: "pointer",
                 display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "2px 6px",
-                color: on ? T.gold : T.dim, transition: "color 0.2s",
+                color: on ? T.gold : T.dim, transition: "color 0.2s", position: "relative",
               }}>
+                {t.id === "profile" && unreadDMs > 0 && (
+                  <span style={{
+                    position: "absolute", top: 0, right: 2, width: 8, height: 8,
+                    borderRadius: "50%", background: T.gold,
+                  }} />
+                )}
                 <Ico size={22} strokeWidth={on ? 2.4 : 2} />
                 <span style={{ fontSize: 10.5, fontFamily: "'Inter',sans-serif", fontWeight: on ? 700 : 500 }}>{t.label}</span>
               </button>

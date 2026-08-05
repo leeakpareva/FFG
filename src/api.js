@@ -93,6 +93,25 @@ export function createApi(getToken) {
       return json(await fetch(`${API_BASE}/api/articles/${id}`, { headers: await auth() }));
     },
 
+    /** Article engagement — same contracts as posts. */
+    async likeArticle(id) {
+      return json(await fetch(`${API_BASE}/api/articles/${id}/like`, { method: 'POST', headers: await auth() }));
+    },
+    async articleComments(id) {
+      return json(await fetch(`${API_BASE}/api/articles/${id}/comments`, { headers: await auth() }));
+    },
+    async addArticleComment(id, body) {
+      return json(await fetch(`${API_BASE}/api/articles/${id}/comments`, {
+        method: 'POST',
+        headers: { ...(await auth()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      }));
+    },
+    async deleteArticleComment(id) {
+      const res = await fetch(`${API_BASE}/api/articles/comments/${id}`, { method: 'DELETE', headers: await auth() });
+      if (!res.ok && res.status !== 204) throw new Error(`delete failed (${res.status})`);
+    },
+
     async listEvents() {
       return json(await fetch(`${API_BASE}/api/events`, { headers: await auth() }));
     },
@@ -135,12 +154,22 @@ export function createApi(getToken) {
       return json(await fetch(`${API_BASE}/api/posts`, { headers: await auth() }));
     },
 
-    async createPost({ body, pillar, image_key }) {
+    async createPost({ body, pillar, image_key, tags }) {
       return json(await fetch(`${API_BASE}/api/posts`, {
         method: 'POST',
         headers: { ...(await auth()), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body, pillar, image_key }),
+        body: JSON.stringify({ body, pillar, image_key, tags }),
       }));
+    },
+
+    /** A member's own posts — feeds the profile grid. */
+    async memberPosts(id) {
+      return json(await fetch(`${API_BASE}/api/members/${id}/posts`, { headers: await auth() }));
+    },
+
+    /** Posts a member is tagged in — the profile's second tab. */
+    async memberTagged(id) {
+      return json(await fetch(`${API_BASE}/api/members/${id}/tagged`, { headers: await auth() }));
     },
 
     /** Toggle. Returns { likes, liked } — the server's count is the truth. */
@@ -148,6 +177,71 @@ export function createApi(getToken) {
       return json(await fetch(`${API_BASE}/api/posts/${id}/like`, {
         method: 'POST', headers: await auth(),
       }));
+    },
+
+    /** Edit your own post's words. */
+    async updatePost(id, body) {
+      return json(await fetch(`${API_BASE}/api/posts/${id}`, {
+        method: 'PATCH',
+        headers: { ...(await auth()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      }));
+    },
+
+    /** Delete your own post (admins can delete any). */
+    async deletePost(id) {
+      const res = await fetch(`${API_BASE}/api/posts/${id}`, {
+        method: 'DELETE', headers: await auth(),
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`delete failed (${res.status})`);
+    },
+
+    async listComments(postId) {
+      return json(await fetch(`${API_BASE}/api/posts/${postId}/comments`, { headers: await auth() }));
+    },
+
+    async addComment(postId, body) {
+      return json(await fetch(`${API_BASE}/api/posts/${postId}/comments`, {
+        method: 'POST',
+        headers: { ...(await auth()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      }));
+    },
+
+    async deleteComment(id) {
+      const res = await fetch(`${API_BASE}/api/comments/${id}`, {
+        method: 'DELETE', headers: await auth(),
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`delete failed (${res.status})`);
+    },
+
+    /** Bookmark toggle. Returns { saved }. */
+    async savePost(id) {
+      return json(await fetch(`${API_BASE}/api/posts/${id}/save`, {
+        method: 'POST', headers: await auth(),
+      }));
+    },
+
+    /** Your bookmarks, newest first. */
+    async savedPosts() {
+      return json(await fetch(`${API_BASE}/api/me/saved`, { headers: await auth() }));
+    },
+
+    /** Report a member to the FFG team — lands in the admin activity views. */
+    async reportMember(id, reason) {
+      return json(await fetch(`${API_BASE}/api/members/${id}/report`, {
+        method: 'POST',
+        headers: { ...(await auth()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }));
+    },
+
+    /** Who follows them / who they follow — the IG-style lists. */
+    async followers(id) {
+      return json(await fetch(`${API_BASE}/api/members/${id}/followers`, { headers: await auth() }));
+    },
+    async following(id) {
+      return json(await fetch(`${API_BASE}/api/members/${id}/following`, { headers: await auth() }));
     },
 
     /** Toggle. Returns { following }. */
@@ -207,8 +301,8 @@ export function createApi(getToken) {
 }
 
 /** Client-side guard rails, mirrored server-side. */
-export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;          // images
-export const MAX_VIDEO_BYTES = 60 * 1024 * 1024;          // video clips
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;         // images (full-res photos)
+export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;         // video clips
 export const ACCEPTED_IMAGE_TYPES = 'image/jpeg,image/png,image/webp,image/gif';
 export const ACCEPTED_VIDEO_TYPES = 'video/mp4,video/webm,video/quicktime';
 export const ACCEPTED_MEDIA_TYPES = `${ACCEPTED_IMAGE_TYPES},${ACCEPTED_VIDEO_TYPES}`;
@@ -222,7 +316,7 @@ export function validateImage(file) {
     return 'That file type is not supported. Use JPEG, PNG, WebP or GIF.';
   }
   if (file.size > MAX_UPLOAD_BYTES) {
-    return `That image is ${(file.size / 1024 / 1024).toFixed(1)}MB. The limit is 8MB.`;
+    return `That image is ${(file.size / 1024 / 1024).toFixed(1)}MB. The limit is 25MB.`;
   }
   return null;
 }
@@ -232,7 +326,7 @@ export function validateMedia(file) {
   if (!file) return 'No file selected.';
   if (isVideoFile(file)) {
     if (file.size > MAX_VIDEO_BYTES) {
-      return `That video is ${(file.size / 1024 / 1024).toFixed(0)}MB. The limit is 60MB.`;
+      return `That video is ${(file.size / 1024 / 1024).toFixed(0)}MB. The limit is 100MB.`;
     }
     return null;
   }
