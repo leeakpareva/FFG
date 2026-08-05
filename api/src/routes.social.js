@@ -10,6 +10,7 @@ import { q } from './db.js';
 import { requireMember } from './auth.js';
 import { track, trackPing } from './track.js';
 import { embedPost } from './embed.js';
+import { notify } from './ws.js';
 
 export const socialRouter = Router();
 
@@ -155,6 +156,7 @@ socialRouter.post('/posts', requireMember, async (req, res) => {
   }
 
   const full = await q(`${POST_SELECT} WHERE p.id = $2`, [req.member.id, rows[0].id]);
+  notify(null, { type: 'post', from: req.member.id }); // the feed has news
   res.status(201).json(shapePost(full.rows[0]));
 });
 
@@ -224,6 +226,7 @@ socialRouter.post('/posts/:id/comments', requireMember, async (req, res) => {
       [req.params.id, req.member.id, body.slice(0, 1000)]
     );
     track(req.member.id, 'comment', { post: req.params.id });
+    notify(null, { type: 'comment', post: req.params.id, from: req.member.id });
     res.status(201).json({
       id: rows[0].id, uid: req.member.id, mine: true,
       author: { name: req.member.name, handle: req.member.handle, avatar_url: null },
@@ -429,5 +432,13 @@ socialRouter.post('/threads/:id/messages', requireMember, async (req, res) => {
     [req.params.id, req.member.id, body.slice(0, 2000)]
   );
   track(req.member.id, 'message_sent', { thread: req.params.id });
+
+  /* Ring the other side's doorbell — their badge and open chat update now,
+     not on the next poll. */
+  const other = await q(
+    `SELECT CASE WHEN member_a = $2 THEN member_b ELSE member_a END AS other
+       FROM threads WHERE id = $1`, [req.params.id, req.member.id]);
+  if (other.rows[0]) notify([other.rows[0].other], { type: 'dm', thread: req.params.id, from: req.member.id });
+
   res.status(201).json({ id: rows[0].id, me: true, text: body, at: rows[0].created_at });
 });

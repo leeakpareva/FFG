@@ -11,6 +11,7 @@ import { socialRouter } from './routes.social.js';
 import { adminLoginRouter } from './adminAuth.js';
 import { adminRouter } from './routes.admin.js';
 import { stripeWebhookRouter } from './stripe.js';
+import { setupWs } from './ws.js';
 import { catchAsync } from './catchAsync.js';
 
 const app = express();
@@ -113,4 +114,7 @@ app.use((err, _req, res, _next) => {
 });
 
 const port = process.env.PORT || 8110;
-app.listen(port, '0.0.0.0', () => console.log(`[api] listening on ${port}`));
+const server = app.listen(port, '0.0.0.0', () => console.log(`[api] listening on ${port}`));
+
+// Real-time doorbell: /ws, same Clerk auth as REST.
+setupWs(server);

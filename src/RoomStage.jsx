@@ -167,12 +167,12 @@ export default function RoomStage({ T, room, profile, onLeave, openUser }) {
   const chatUnread = R.chat.length - chatSeen;
   const prevHands = React.useRef(new Set());
   useEffect(() => {
-    const now = new Set(R.participants.filter(p => p.hand_raised).map(p => p.member_id));
+    const now = new Set(R.participants.filter(p => p.hand_raised).map(p => p.id));
     if (R.role === "speaker") {
       for (const id of now) {
         if (!prevHands.current.has(id)) {
-          const person = R.participants.find(p => p.member_id === id);
-          if (person && person.member_id !== profile?.id) setHandAlert(person);
+          const person = R.participants.find(p => p.id === id);
+          if (person && person.id !== profile?.id) setHandAlert(person);
         }
       }
     }
@@ -215,10 +215,10 @@ export default function RoomStage({ T, room, profile, onLeave, openUser }) {
         }}>
           <Hand size={18} color={T.gold} />
           <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontFamily: "'Inter',sans-serif", color: T.cream }}>
-            <strong>{handAlert.name?.split(" ")[0] || handAlert.member_id}</strong> wants to speak
+            <strong>{handAlert.name?.split(" ")[0] || handAlert.id}</strong> wants to speak
           </span>
           {canModerate && (
-            <button onClick={() => { R.bringUp(handAlert.member_id); setHandAlert(null); }} style={{
+            <button onClick={() => { R.bringUp(handAlert.id); setHandAlert(null); }} style={{
               border: "none", cursor: "pointer", borderRadius: 999, padding: "8px 14px",
               background: `linear-gradient(120deg, ${T.gold}, ${T.goldSoft})`, color: "#FFF",
               fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 12.5,

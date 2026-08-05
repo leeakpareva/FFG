@@ -2071,10 +2071,14 @@ const ChatView = ({ uid, onBack, openUser }) => {
           .then(({ messages }) => { if (live) setMsgs(messages); })
           .catch(() => {});
         load();
-        poll = setInterval(load, 5_000);
+        poll = setInterval(load, 15_000); // fallback; the socket does the real-time
+        const onRt = (e) => { if (e.detail?.type === "dm" && e.detail.thread === id) load(); };
+        window.addEventListener("ffg:rt", onRt);
+        cleanupRt = () => window.removeEventListener("ffg:rt", onRt);
       })
       .catch(() => {});
-    return () => { live = false; if (poll) clearInterval(poll); };
+    let cleanupRt = null;
+    return () => { live = false; if (poll) clearInterval(poll); cleanupRt && cleanupRt(); };
   }, [uid, getToken]);
 
   useEffect(() => {
@@ -3219,10 +3223,16 @@ const Feed = ({ openUser, openConcierge, openRoom, member }) => {
 
   useEffect(() => {
     let live = true;
-    createApi(getToken).listPosts()
+    const load = () => createApi(getToken).listPosts()
       .then(({ posts }) => { if (live) setPosts(posts.map(p => shapeFeedPost(p, member?.id))); })
-      .catch(() => { if (live) setPosts([]); });
-    return () => { live = false; };
+      .catch(() => { if (live) setPosts(p => p || []); });
+    load();
+    // Someone posted or commented → the feed refreshes itself, live.
+    const onRt = (e) => {
+      if ((e.detail?.type === "post" || e.detail?.type === "comment") && e.detail.from !== member?.id) load();
+    };
+    window.addEventListener("ffg:rt", onRt);
+    return () => { live = false; window.removeEventListener("ffg:rt", onRt); };
   }, [getToken, member?.id]);
 
   const publish = async ({ text, imageKey, tags }) => {
@@ -3861,9 +3871,38 @@ export default function FFGApp() {
   const [composeSignal, setComposeSignal] = useState(0);
 
   /**
-   * Unread DMs, polled quietly. Without this a message can sit for days
-   * with the recipient none the wiser — this feeds the inbox badge and a
-   * dot on the You tab.
+   * Real-time doorbell. One WebSocket while the app is open; every event
+   * fans out as a window event ("ffg:rt") that any screen can listen to.
+   * Reconnects with a fresh token; the polls below remain as the net.
+   */
+  useEffect(() => {
+    if (!isSignedIn || !profile) return;
+    let ws = null;
+    let alive = true;
+    let retry = 1000;
+    const base = (import.meta.env.VITE_API_BASE || window.location.origin).replace(/^http/, "ws").replace(/\/$/, "");
+    const connect = async () => {
+      if (!alive) return;
+      try {
+        const token = await getToken();
+        ws = new WebSocket(`${base}/ws?token=${encodeURIComponent(token)}`);
+        ws.onopen = () => { retry = 1000; };
+        ws.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            window.dispatchEvent(new CustomEvent("ffg:rt", { detail: msg }));
+          } catch { /* not ours */ }
+        };
+        ws.onclose = () => { if (alive) setTimeout(connect, retry = Math.min(retry * 2, 30_000)); };
+      } catch { if (alive) setTimeout(connect, retry = Math.min(retry * 2, 30_000)); }
+    };
+    connect();
+    return () => { alive = false; try { ws?.close(); } catch { /* gone */ } };
+  }, [isSignedIn, profile, getToken]);
+
+  /**
+   * Unread DMs: instant via the socket, polled as the fallback. Feeds the
+   * inbox badge and the dot on the You tab.
    */
   const [unreadDMs, setUnreadDMs] = useState(0);
   useEffect(() => {
@@ -3874,7 +3913,9 @@ export default function FFGApp() {
       .catch(() => {});
     check();
     const t = setInterval(check, 30_000);
-    return () => { live = false; clearInterval(t); };
+    const onRt = (e) => { if (e.detail?.type === "dm") check(); };
+    window.addEventListener("ffg:rt", onRt);
+    return () => { live = false; clearInterval(t); window.removeEventListener("ffg:rt", onRt); };
   }, [isSignedIn, profile, getToken]);
   const openUser = uid => setViewUser(uid);
 
