@@ -1,0 +1,18 @@
+# Vercel CLI does not read .gitignore, so secrets have to be excluded here too.
+# `vercel --prod` uploads the working directory, and .env holds the Clerk and
+# LiveKit secrets. Nothing outside the frontend build needs to go up.
+
+.env
+.env.*
+!.env.example
+
+# The API and database run on the ASUS, not on Vercel.
+api/
+db/
+docker-compose.yml
+Dockerfile
+nginx.conf
+tests/
+
+# Backups and local scratch
+*.log

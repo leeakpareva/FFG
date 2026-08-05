@@ -13,24 +13,33 @@ import { createReadStream } from 'node:fs';
 import { q } from './db.js';
 import { requireMember } from './auth.js';
 import * as storage from './storage.js';
+import { track } from './track.js';
 
-const MAX_BYTES = 8 * 1024 * 1024; // 8MB
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;   // 8MB
+const MAX_VIDEO_BYTES = 60 * 1024 * 1024;  // 60MB — short clips, not films
 
-// mime -> extension. This map IS the allowlist: anything absent is rejected.
-const ALLOWED = {
+// mime -> extension. These maps ARE the allowlist: anything absent is
+// rejected. Videos are capped separately because they are honestly bigger.
+const ALLOWED_IMAGE = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
   'image/gif': 'gif',
 };
+const ALLOWED_VIDEO = {
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'video/quicktime': 'mov', // iPhone camera; note HEVC .mov may not play in every browser
+};
 
 const KINDS = new Set(['avatar', 'post', 'event', 'article', 'other']);
 
-// Memory storage: files are small, capped, and must be sniffed before they
-// are allowed anywhere near disk.
+// Memory storage: files are capped and must be sniffed before they are
+// allowed anywhere near disk. 60MB in memory per request is fine at this
+// membership's scale.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_BYTES, files: 1 },
+  limits: { fileSize: MAX_VIDEO_BYTES, files: 1 },
 });
 
 export const mediaRouter = Router();
@@ -42,12 +51,21 @@ mediaRouter.post('/', requireMember, upload.single('file'), async (req, res) => 
 
   // Trust the bytes, not the header.
   const sniffed = await fileTypeFromBuffer(req.file.buffer);
-  const ext = sniffed && ALLOWED[sniffed.mime];
+  const isImage = sniffed && ALLOWED_IMAGE[sniffed.mime];
+  const isVideo = sniffed && ALLOWED_VIDEO[sniffed.mime];
+  const ext = isImage || isVideo;
   if (!ext) {
     return res.status(415).json({
       error: 'unsupported file type',
-      detail: 'JPEG, PNG, WebP or GIF only',
+      detail: 'Images: JPEG, PNG, WebP, GIF. Video: MP4, WebM, MOV.',
     });
+  }
+  if (isImage && req.file.size > MAX_IMAGE_BYTES) {
+    return res.status(413).json({ error: 'too large', detail: 'Images are capped at 8MB.' });
+  }
+  // Avatars are images, full stop.
+  if (isVideo && kind === 'avatar') {
+    return res.status(415).json({ error: 'unsupported file type', detail: 'Profile photos are images.' });
   }
 
   const key = storage.makeKey(req.member.id, kind, ext);
@@ -70,6 +88,7 @@ mediaRouter.post('/', requireMember, upload.single('file'), async (req, res) => 
   }
 
   await q('UPDATE media SET uploaded = true WHERE id = $1', [media.id]);
+  track(req.member.id, 'media_upload', { media: media.id, bytes: req.file.size });
 
   res.status(201).json({
     id: media.id,
@@ -100,7 +119,7 @@ export const mediaFileRouter = Router();
 mediaFileRouter.get(/^\/(.+)$/, async (req, res) => {
   const key = req.params[0];
   const { rows } = await q(
-    'SELECT mime_type FROM media WHERE storage_key = $1 AND uploaded',
+    'SELECT mime_type, byte_size FROM media WHERE storage_key = $1 AND uploaded',
     [key]
   );
   if (!rows[0]) return res.status(404).end();
@@ -110,6 +129,25 @@ mediaFileRouter.get(/^\/(.+)$/, async (req, res) => {
   res.set('Cache-Control', 'public, max-age=31536000, immutable');
   res.set('X-Content-Type-Options', 'nosniff');
   // Uploaded content is never executed in the page's origin context.
-  res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'");
+  res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; media-src 'self'");
+
+  /* Range requests: video players seek, and a player that cannot seek
+     feels broken. One contiguous range is all any of them ask for. */
+  const size = Number(rows[0].byte_size);
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  res.set('Accept-Ranges', 'bytes');
+  if (range && size > 0) {
+    const start = range[1] ? parseInt(range[1], 10) : 0;
+    const end = range[2] ? Math.min(parseInt(range[2], 10), size - 1) : size - 1;
+    if (start >= size || start > end) {
+      return res.status(416).set('Content-Range', `bytes */${size}`).end();
+    }
+    res.status(206);
+    res.set('Content-Range', `bytes ${start}-${end}/${size}`);
+    res.set('Content-Length', String(end - start + 1));
+    return createReadStream(storage.absolutePath(key), { start, end }).pipe(res);
+  }
+
+  res.set('Content-Length', String(size));
   createReadStream(storage.absolutePath(key)).pipe(res);
 });

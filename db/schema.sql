@@ -251,10 +251,12 @@ CREATE INDEX articles_embedding_idx ON articles USING hnsw (embedding vector_cos
 
 -- ------------------------------------------------------------------ views
 -- Live listener count = seeded baseline + whoever is genuinely present.
+-- The ::int casts matter. count() is bigint, node-pg returns bigint as a
+-- string, and the client would then concatenate rather than add.
 CREATE OR REPLACE VIEW room_state AS
 SELECT r.id, r.title, r.description, r.tag, r.is_live, r.scheduled_for,
-       r.base_listeners + count(p.member_id) AS listeners,
-       count(p.member_id) FILTER (WHERE p.hand_raised) AS hands_raised
+       (r.base_listeners + count(p.member_id))::int AS listeners,
+       (count(p.member_id) FILTER (WHERE p.hand_raised))::int AS hands_raised
 FROM rooms r
 LEFT JOIN room_participants p ON p.room_id = r.id
 GROUP BY r.id;

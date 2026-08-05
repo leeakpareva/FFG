@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { q, pool } from './db.js';
 import { requireMember, requireAdmin } from './auth.js';
+import { track } from './track.js';
 
 export const articlesRouter = Router();
 
@@ -31,6 +32,7 @@ articlesRouter.get('/:id', requireMember, async (req, res) => {
     'SELECT body FROM article_paragraphs WHERE article_id = $1 ORDER BY ord',
     [req.params.id]
   );
+  track(req.member.id, 'article_read', { article: req.params.id });
   res.json({ ...rows[0], body: paras.rows.map(p => p.body) });
 });
 

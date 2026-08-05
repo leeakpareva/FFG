@@ -1,0 +1,101 @@
+# Connect — Forbes Family Group — AWS (eu-west-2, London)
+#
+# Replaces the ASUS deployment. Differences that matter:
+#
+#   * ffg-api is here. The old docker-compose.yml predated it and could not
+#     actually bring the app up.
+#   * Postgres publishes NOTHING. On the ASUS it was bound to 5435 for
+#     debugging; on a public-facing host that is an unnecessary risk for a
+#     table of member personal data. Use `docker exec` to reach it.
+#   * The tunnel dials out, so this instance needs no inbound web ports at
+#     all. The security group only allows SSH.
+#
+# Secrets come from .env, which is never committed: this repo is public.
+
+services:
+  ffg-postgres:
+    image: pgvector/pgvector:pg17
+    container_name: ffg-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ffg}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ffg-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ffg}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [ffg-net]
+    # 1.9GB box. Leave room for the API and nginx.
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  ffg-api:
+    build: ./api
+    image: ffg-api:latest
+    container_name: ffg-api
+    restart: always
+    # env_file, not `environment:` — env_file values pass to the container
+    # verbatim, which matters because ADMIN_PASSWORD_HASH is a bcrypt string
+    # full of `$` that compose interpolation would silently mangle.
+    env_file: [.env]
+    environment:
+      PORT: 8110
+    volumes:
+      - ffg-media:/data/media
+    depends_on:
+      ffg-postgres:
+        condition: service_healthy
+    networks: [ffg-net]
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  ffg-connect:
+    build: .
+    image: ffg-connect:latest
+    container_name: ffg-connect
+    restart: always
+    depends_on:
+      - ffg-api
+    networks: [ffg-net]
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+
+  # Connect's own Cloudflare tunnel, separate from the NAVADA one.
+  #
+  # The shared tunnel carries 33 ingress rules in a single object, so adding
+  # a rule there rewrites all of them. This client gets its own tunnel
+  # instead: nothing we do here can disturb the other 31 hostnames, and the
+  # client's traffic is theirs alone.
+  #
+  # It dials out, which is why this instance needs no inbound web ports.
+  ffg-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: ffg-tunnel
+    restart: always
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - ffg-connect
+      - ffg-api
+    networks: [ffg-net]
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  ffg-pgdata:
+  ffg-media:
+
+networks:
+  ffg-net:
+    name: ffg-net

@@ -49,3 +49,25 @@ instance (`pk_live_…`) before any App Store build.
 
 Vercel, connected to this repo. Pushes to `main` deploy to production
 automatically; pull requests get preview deployments.
+
+The client-facing copy runs on a dedicated AWS EC2 box (eu-west-2, London)
+in its own VPC, published through its own Cloudflare tunnel:
+
+- **App:** https://connect.navada-edge-server.uk
+- **API:** https://api-connect.navada-edge-server.uk/api/health
+
+See `OPERATIONS.md` for the full runbook.
+
+## AWS console (sign-in required, account 491085390194)
+
+| What | Link |
+| --- | --- |
+| Dashboard — every service, one page | https://eu-west-2.console.aws.amazon.com/cloudwatch/home?region=eu-west-2#dashboards/dashboard/NAVADA-All-Services |
+| The Connect EC2 box (`ffg-connect`) | https://eu-west-2.console.aws.amazon.com/ec2/home?region=eu-west-2#InstanceDetails:instanceId=i-04a64edf230a7e58b |
+| Everything tagged to the client | https://eu-west-2.console.aws.amazon.com/resource-groups/tag-editor/find-resources?region=eu-west-2 — filter tag `Client=ForbesFamilyGroup` |
+| Budgets (incl. `FFG-Connect-ClientRebill`) | https://us-east-1.console.aws.amazon.com/billing/home#/budgets |
+
+The dashboard is the one to bookmark: it opens with an inventory table
+(EC2, Lambda, DynamoDB, S3, budgets) and live charts underneath. The
+billing widget stays empty until "Receive Billing Alerts" is switched on
+in Billing preferences.

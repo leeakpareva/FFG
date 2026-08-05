@@ -10,9 +10,14 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.51.0",
+    "bcryptjs": "^3.0.3",
+    "jsonwebtoken": "^9.0.3",
+    "livekit-client": "^2.21.0",
     "lucide-react": "^0.469.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "recharts": "^3.10.1",
+    "stripe": "^22.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",

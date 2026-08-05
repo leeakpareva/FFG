@@ -13,6 +13,12 @@ export function useViewport() {
 
   useEffect(() => {
     const onResize = () => setWidth(window.innerWidth);
+    /* Re-read on mount. The initial useState runs during render, which can
+       land before the window has settled at its real size (a restored
+       window, a headless viewport, a browser applying its chrome). Without
+       this the app can commit to the wrong breakpoint and stay there until
+       something happens to resize it. */
+    onResize();
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
     return () => {
