@@ -9,7 +9,6 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { fileTypeFromBuffer } from 'file-type';
-import { createReadStream } from 'node:fs';
 import { q } from './db.js';
 import { requireMember } from './auth.js';
 import * as storage from './storage.js';
@@ -145,9 +144,9 @@ mediaFileRouter.get(/^\/(.+)$/, async (req, res) => {
     res.status(206);
     res.set('Content-Range', `bytes ${start}-${end}/${size}`);
     res.set('Content-Length', String(end - start + 1));
-    return createReadStream(storage.absolutePath(key), { start, end }).pipe(res);
+    return (await storage.createStream(key, { start, end })).pipe(res);
   }
 
   res.set('Content-Length', String(size));
-  createReadStream(storage.absolutePath(key)).pipe(res);
+  (await storage.createStream(key)).pipe(res);
 });

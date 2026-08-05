@@ -5,6 +5,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY src ./src
+COPY scripts ./scripts
 
 # Uploads land on a mounted volume, owned by the unprivileged node user.
 RUN mkdir -p /data/media && chown -R node:node /data/media
