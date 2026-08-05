@@ -51,22 +51,37 @@ export function embedPost(postId, body) {
     .catch(e => console.error('[embed] post %s: %s', postId, e.message));
 }
 
+/**
+ * Every table that carries a vector, and what its vector is made of.
+ * Adding a table here is the whole job of making it semantically rankable.
+ */
+const SOURCES = [
+  { table: 'members',   cols: 'name, role, pillar, bio',  text: r => [r.name, r.role, r.pillar, r.bio] },
+  { table: 'posts',     cols: 'body',                     text: r => [r.body] },
+  { table: 'events',    cols: 'name, venue, about',       text: r => [r.name, r.venue, r.about] },
+  { table: 'rooms',     cols: 'title, description',       text: r => [r.title, r.description] },
+  { table: 'articles',  cols: 'title, excerpt',           text: r => [r.title, r.excerpt] },
+  { table: 'replays',   cols: 'title, summary',           text: r => [r.title, r.summary] },
+  { table: 'workshops', cols: 'title, blurb',             text: r => [r.title, r.blurb] },
+];
+
 /** Backfill everything missing a vector. Called from the admin panel. */
 export async function reindexAll() {
   if (!KEY) return { embedded: 0, detail: 'no OPENAI_API_KEY' };
   let embedded = 0;
+  const byTable = {};
 
-  const members = await q(`SELECT id, name, role, pillar, bio FROM members WHERE embedding IS NULL`);
-  for (const m of members.rows) {
-    const vec = await embedText([m.name, m.role, m.pillar, m.bio].filter(Boolean).join('. '));
-    if (vec) { await q('UPDATE members SET embedding = $2 WHERE id = $1', [m.id, literal(vec)]); embedded++; }
+  for (const src of SOURCES) {
+    const { rows } = await q(`SELECT id, ${src.cols} FROM ${src.table} WHERE embedding IS NULL`);
+    for (const row of rows) {
+      const vec = await embedText(src.text(row).filter(Boolean).join('. '));
+      if (vec) {
+        await q(`UPDATE ${src.table} SET embedding = $2 WHERE id = $1`, [row.id, literal(vec)]);
+        embedded++;
+        byTable[src.table] = (byTable[src.table] || 0) + 1;
+      }
+    }
   }
 
-  const posts = await q(`SELECT id, body FROM posts WHERE embedding IS NULL`);
-  for (const p of posts.rows) {
-    const vec = await embedText(p.body);
-    if (vec) { await q('UPDATE posts SET embedding = $2 WHERE id = $1', [p.id, literal(vec)]); embedded++; }
-  }
-
-  return { embedded };
+  return { embedded, byTable };
 }
