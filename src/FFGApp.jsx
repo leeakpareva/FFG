@@ -563,7 +563,7 @@ const PostGrid = ({ posts, emptyTitle, emptyHint, onOpen }) => {
             {p.image_url ? (
               isVideoUrl(p.image_url) ? (
                 <>
-                  <video src={mediaUrl(p.image_url)} muted playsInline preload="metadata"
+                  <video src={mediaUrl(p.image_url) + (p.poster_url ? "" : "#t=0.001")} muted playsInline preload="metadata"
                     poster={p.poster_url ? mediaUrl(p.poster_url) : undefined}
                     style={media} />
                   <div style={{
@@ -2806,7 +2806,9 @@ const Post = ({ p, openUser, member, onDeleted }) => {
       {(p.imageUrl || p.image) && (
         <div style={{ borderRadius: 16, overflow: "hidden", marginBottom: 12, border: `1px solid ${T.line}` }}>
           {isVideoUrl(p.imageUrl) ? (
-            <video src={p.imageUrl} controls playsInline preload="metadata"
+            /* No cover? The #t=0.001 fragment makes Safari (and Chrome) paint
+               the first frame instead of a black box. */
+            <video src={p.posterUrl ? p.imageUrl : `${p.imageUrl}#t=0.001`} controls playsInline preload="metadata"
               poster={p.posterUrl || undefined}
               style={{ width: "100%", display: "block", maxHeight: 420, background: "#000" }} />
           ) : (
