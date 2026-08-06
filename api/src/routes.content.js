@@ -94,7 +94,7 @@ contentRouter.post('/events/:id/checkout', requireMember, async (req, res) => {
 
 contentRouter.get('/replays', requireMember, async (_req, res) => {
   const { rows } = await q(`
-    SELECT id, title, summary, tag, duration, stream_uid, image_key,
+    SELECT id, title, summary, tag, duration, stream_uid, video_key, image_key,
            chapters, speakers, created_at
       FROM replays
      WHERE published
@@ -104,7 +104,7 @@ contentRouter.get('/replays', requireMember, async (_req, res) => {
     replays: rows.map((r) => ({
       ...r,
       image_url: r.image_key ? `/media/${r.image_key}` : null,
-      has_video: !!r.stream_uid,
+      has_video: !!(r.video_key || r.stream_uid),
     })),
   });
 });
@@ -116,9 +116,14 @@ contentRouter.get('/replays', requireMember, async (_req, res) => {
  */
 contentRouter.get('/replays/:id/play', requireMember, async (req, res) => {
   const { rows } = await q(
-    'SELECT stream_uid FROM replays WHERE id = $1 AND published', [req.params.id]
+    'SELECT stream_uid, video_key FROM replays WHERE id = $1 AND published', [req.params.id]
   );
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
+
+  // Native video: the file streams from /media with range requests, the
+  // same pipeline as every feed video. No third-party service involved.
+  if (rows[0].video_key) return res.json({ src: `/media/${rows[0].video_key}` });
+
   if (!rows[0].stream_uid) return res.status(409).json({ error: 'no video attached yet' });
   if (!streamReady) return res.status(503).json({ error: 'video service not configured' });
 

@@ -8,15 +8,17 @@
  * the interesting rules (signed video, webhook, ledger) live in their own
  * modules.
  */
-import { Router } from 'express';
+import express, { Router } from 'express';
 import multer from 'multer';
-import { fileTypeFromBuffer } from 'file-type';
+import { fileTypeFromBuffer, fileTypeFromFile } from 'file-type';
 import crypto from 'node:crypto';
+import { mkdir, appendFile, unlink, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { createClerkClient } from '@clerk/backend';
 import { q, pool } from './db.js';
 import { requireSuperAdmin } from './adminAuth.js';
 import * as storage from './storage.js';
-import { directUploadUrl, videoStatus, deleteVideo, streamReady } from './stream.js';
+import { videoStatus, deleteVideo, streamReady } from './stream.js';
 import { createPayment, stripeReady, stripeTestMode, payId } from './stripe.js';
 import { reindexAll, embedReady } from './embed.js';
 
@@ -488,19 +490,121 @@ adminRouter.post('/replays', async (req, res) => {
   res.status(201).json({ id });
 });
 
-/** Asks Stream for a direct-upload URL and pins the resulting uid to the row. */
-adminRouter.post('/replays/:id/video', async (req, res) => {
-  if (!streamReady) return res.status(503).json({ error: 'Stream is not connected' });
-  const { rows } = await q('SELECT id, title FROM replays WHERE id = $1', [req.params.id]);
+/**
+ * Replay video, natively stored.
+ *
+ * Videos land in our own storage (R2 behind the driver) and play through
+ * /media with range requests, exactly like feed videos — no third-party
+ * video service. Cloudflare's proxy caps a single request at ~100MB and
+ * replay files easily exceed that, so the browser sends the file in
+ * sequential chunks (32MB each) that are assembled on the media volume,
+ * sniffed, and only then promoted to storage.
+ */
+const VIDEO_TMP = path.join(process.env.MEDIA_ROOT || '/data/media', 'tmp');
+const MAX_REPLAY_BYTES = 4 * 1024 * 1024 * 1024; // 4GB — an hour of phone 4K
+const REPLAY_VIDEO_MIME = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
+
+/** uploadId -> { replayId, received, bytes, touched } */
+const videoUploads = new Map();
+
+// Abandoned uploads: sweep anything untouched for an hour.
+setInterval(() => {
+  const cutoff = Date.now() - 3600_000;
+  for (const [id, u] of videoUploads) {
+    if (u.touched < cutoff) {
+      videoUploads.delete(id);
+      unlink(path.join(VIDEO_TMP, id)).catch(() => {});
+    }
+  }
+}, 600_000).unref();
+
+adminRouter.post('/replays/:id/video/begin', async (req, res) => {
+  const { rows } = await q('SELECT id FROM replays WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
-  const { uploadURL, uid } = await directUploadUrl({ name: rows[0].title });
-  await q('UPDATE replays SET stream_uid = $2 WHERE id = $1', [req.params.id, uid]);
-  res.json({ uploadURL, uid });
+  await mkdir(VIDEO_TMP, { recursive: true });
+  const uploadId = crypto.randomUUID();
+  videoUploads.set(uploadId, { replayId: req.params.id, received: 0, bytes: 0, touched: Date.now() });
+  res.status(201).json({ upload_id: uploadId, chunk_bytes: 32 * 1024 * 1024 });
+});
+
+adminRouter.put(
+  '/replays/:id/video/part/:uploadId/:index',
+  express.raw({ type: () => true, limit: '40mb' }),
+  async (req, res) => {
+    const u = videoUploads.get(req.params.uploadId);
+    if (!u || u.replayId !== req.params.id) return res.status(404).json({ error: 'no such upload' });
+    const index = Number(req.params.index);
+    if (index !== u.received) {
+      return res.status(409).json({ error: `expected part ${u.received}, got ${index}` });
+    }
+    if (!req.body?.length) return res.status(400).json({ error: 'empty part' });
+    if (u.bytes + req.body.length > MAX_REPLAY_BYTES) {
+      videoUploads.delete(req.params.uploadId);
+      await unlink(path.join(VIDEO_TMP, req.params.uploadId)).catch(() => {});
+      return res.status(413).json({ error: 'video too large (4GB cap)' });
+    }
+    await appendFile(path.join(VIDEO_TMP, req.params.uploadId), req.body);
+    u.received += 1;
+    u.bytes += req.body.length;
+    u.touched = Date.now();
+    res.json({ received: u.received, bytes: u.bytes });
+  }
+);
+
+adminRouter.post('/replays/:id/video/finish', async (req, res) => {
+  const uploadId = req.body?.upload_id;
+  const u = videoUploads.get(uploadId);
+  if (!u || u.replayId !== req.params.id) return res.status(404).json({ error: 'no such upload' });
+  videoUploads.delete(uploadId);
+  const tmpFile = path.join(VIDEO_TMP, uploadId);
+
+  try {
+    // Trust the assembled bytes, not the picker's file extension.
+    const sniffed = await fileTypeFromFile(tmpFile);
+    const ext = sniffed && REPLAY_VIDEO_MIME[sniffed.mime];
+    if (!ext) {
+      return res.status(415).json({ error: 'unsupported video type', detail: 'MP4, WebM or MOV.' });
+    }
+    const { size } = await stat(tmpFile);
+
+    const owner = await houseMember();
+    if (!owner) return res.status(409).json({ error: 'no house member to own the file' });
+
+    const key = storage.makeKey(owner, 'replay', ext);
+    const { rows } = await q(
+      `INSERT INTO media (owner_id, storage_key, kind, mime_type, byte_size, uploaded)
+       VALUES ($1,$2,'replay',$3,$4,false) RETURNING id`,
+      [owner, key, sniffed.mime, size]
+    );
+    try {
+      await storage.putFile(key, tmpFile);
+    } catch (e) {
+      await q('DELETE FROM media WHERE id = $1', [rows[0].id]);
+      console.error('[admin replay] store failed:', e.message);
+      return res.status(500).json({ error: 'could not store video' });
+    }
+    await q('UPDATE media SET uploaded = true WHERE id = $1', [rows[0].id]);
+
+    // Swap in the new video; clean up whatever it replaces.
+    const prev = await q('SELECT video_key FROM replays WHERE id = $1', [req.params.id]);
+    await q('UPDATE replays SET video_key = $2, stream_uid = NULL WHERE id = $1', [req.params.id, key]);
+    const oldKey = prev.rows[0]?.video_key;
+    if (oldKey && oldKey !== key) {
+      try {
+        await storage.remove(oldKey);
+        await q('DELETE FROM media WHERE storage_key = $1', [oldKey]);
+      } catch { /* stray file; the sweep can have it */ }
+    }
+    res.status(201).json({ video_key: key, bytes: size, mime: sniffed.mime });
+  } finally {
+    unlink(tmpFile).catch(() => {});
+  }
 });
 
 adminRouter.get('/replays/:id/video', async (req, res) => {
-  const { rows } = await q('SELECT stream_uid FROM replays WHERE id = $1', [req.params.id]);
+  const { rows } = await q('SELECT video_key, stream_uid FROM replays WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  if (rows[0].video_key) return res.json({ attached: true, ready: true, state: 'ready' });
   if (!rows[0].stream_uid) return res.json({ attached: false });
   if (!streamReady) return res.json({ attached: true, ready: false, state: 'stream not connected' });
   res.json({ attached: true, ...(await videoStatus(rows[0].stream_uid)) });
@@ -515,8 +619,14 @@ adminRouter.patch('/replays/:id', async (req, res) => {
 });
 
 adminRouter.delete('/replays/:id', async (req, res) => {
-  const { rows } = await q('DELETE FROM replays WHERE id = $1 RETURNING stream_uid', [req.params.id]);
+  const { rows } = await q('DELETE FROM replays WHERE id = $1 RETURNING stream_uid, video_key', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  if (rows[0].video_key) {
+    try {
+      await storage.remove(rows[0].video_key);
+      await q('DELETE FROM media WHERE storage_key = $1', [rows[0].video_key]);
+    } catch (e) { console.error('[admin] replay video delete failed:', e.message); }
+  }
   if (rows[0].stream_uid && streamReady) {
     try { await deleteVideo(rows[0].stream_uid); }
     catch (e) { console.error('[admin] stream delete failed:', e.message); }

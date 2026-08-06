@@ -15,7 +15,7 @@
  *         R2_BUCKET, R2_PREFIX (default "ffg/").
  */
 import { createWriteStream, createReadStream } from 'node:fs';
-import { mkdir, unlink, stat } from 'node:fs/promises';
+import { mkdir, unlink, stat, copyFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import path from 'node:path';
@@ -56,6 +56,13 @@ const localDriver = {
   },
   async createStream(key, range) {
     return createReadStream(resolveSafe(key), range || undefined);
+  },
+  /** Large files arrive assembled on disk — never through a memory buffer. */
+  async putFile(key, filePath) {
+    const full = resolveSafe(key);
+    await mkdir(path.dirname(full), { recursive: true });
+    await copyFile(filePath, full);
+    return key;
   },
 };
 
@@ -111,6 +118,17 @@ function r2Driver() {
       }));
       return res.Body; // a Readable in Node
     },
+    async putFile(key, filePath) {
+      const { client, cmds } = await getClient();
+      const { size } = await stat(filePath);
+      await client.send(new cmds.PutObjectCommand({
+        Bucket: bucket,
+        Key: objectKey(key),
+        Body: createReadStream(filePath),
+        ContentLength: size, // known length: the SDK streams without buffering
+      }));
+      return key;
+    },
   };
 }
 
@@ -120,3 +138,4 @@ export const put = (key, buffer) => driver.put(key, buffer);
 export const remove = key => driver.remove(key);
 export const exists = key => driver.exists(key);
 export const createStream = (key, range) => driver.createStream(key, range);
+export const putFile = (key, filePath) => driver.putFile(key, filePath);

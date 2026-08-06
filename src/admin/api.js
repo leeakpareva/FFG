@@ -80,8 +80,33 @@ export const api = {
   createReplay: (body) => call('/api/admin/replays', { method: 'POST', body }),
   setReplayPublished: (id, published) => call(`/api/admin/replays/${id}`, { method: 'PATCH', body: { published } }),
   deleteReplay: (id) => call(`/api/admin/replays/${id}`, { method: 'DELETE' }),
-  replayUploadUrl: (id) => call(`/api/admin/replays/${id}/video`, { method: 'POST' }),
   replayVideoStatus: (id) => call(`/api/admin/replays/${id}/video`),
+
+  /**
+   * Chunked replay upload: Cloudflare caps one request at ~100MB, replay
+   * files are bigger, so the file travels in sequential 32MB parts and the
+   * API assembles and stores it. onProgress gets 0..100.
+   */
+  async uploadReplayVideo(id, file, onProgress) {
+    const { upload_id, chunk_bytes } = await call(`/api/admin/replays/${id}/video/begin`, { method: 'POST' });
+    const parts = Math.max(1, Math.ceil(file.size / chunk_bytes));
+    for (let i = 0; i < parts; i++) {
+      const blob = file.slice(i * chunk_bytes, Math.min((i + 1) * chunk_bytes, file.size));
+      const res = await fetch(`${API_BASE}/api/admin/replays/${id}/video/part/${upload_id}/${i}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/octet-stream' },
+        body: blob,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new ApiError(data.error || `part ${i + 1}/${parts} failed (${res.status})`, res.status);
+      }
+      onProgress?.(Math.round(((i + 1) / parts) * 95)); // the last 5% is the store
+    }
+    const done = await call(`/api/admin/replays/${id}/video/finish`, { method: 'POST', body: { upload_id } });
+    onProgress?.(100);
+    return done;
+  },
 
   workshops: () => call('/api/admin/workshops'),
   createWorkshop: (body) => call('/api/admin/workshops', { method: 'POST', body }),

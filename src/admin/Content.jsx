@@ -3,8 +3,10 @@
  * here is what makes it exist in the app — drafts stay invisible to
  * members until published.
  *
- * Video goes browser → Cloudflare Stream directly; this screen only asks
- * the API for the one-time upload URL and then reports progress.
+ * Video is stored natively: the file travels to our API in sequential
+ * chunks (Cloudflare's proxy caps a single request at ~100MB), is
+ * assembled and sniffed server-side, and lands in R2 behind the storage
+ * driver. Playback streams from /media like every other asset.
  */
 import React, { useEffect, useState, useRef } from 'react';
 import {
@@ -438,11 +440,11 @@ function Replays() {
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         {rows.map((r, i) => (
           <Row key={r.id} first={!i}>
-            <RowTitle title={r.title} sub={r.stream_uid ? 'video attached' : 'no video yet'} />
+            <RowTitle title={r.title} sub={(r.video_key || r.stream_uid) ? 'video attached' : 'no video yet'} />
             <PillarTag name={r.tag} />
             <DraftTag draft={!r.published} />
             <Button kind="ghost" style={{ padding: '8px 14px' }} onClick={() => setUploading(r)}>
-              {r.stream_uid ? 'Video…' : 'Upload video'}
+              {(r.video_key || r.stream_uid) ? 'Video…' : 'Upload video'}
             </Button>
             <Button kind="ghost" style={{ padding: '8px 14px' }}
                     onClick={() => api.setReplayPublished(r.id, !r.published).then(load)}>
@@ -505,7 +507,7 @@ const VideoSheet = ({ replay, onClose }) => {
   const fileRef = useRef(null);
 
   useEffect(() => {
-    if (replay.stream_uid) {
+    if (replay.video_key || replay.stream_uid) {
       api.replayVideoStatus(replay.id)
         .then(s => setState({ phase: 'attached', pct: 100, detail: s }))
         .catch(() => {});
@@ -517,18 +519,7 @@ const VideoSheet = ({ replay, onClose }) => {
     if (!file) return;
     try {
       setState({ phase: 'preparing', pct: 0 });
-      const { uploadURL } = await api.replayUploadUrl(replay.id);
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', uploadURL);
-        const form = new FormData();
-        form.append('file', file);
-        xhr.upload.onprogress = (ev) =>
-          ev.lengthComputable && setState({ phase: 'uploading', pct: Math.round((ev.loaded / ev.total) * 100) });
-        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`upload failed (${xhr.status})`)));
-        xhr.onerror = () => reject(new Error('upload failed'));
-        xhr.send(form);
-      });
+      await api.uploadReplayVideo(replay.id, file, (pct) => setState({ phase: 'uploading', pct }));
       setState({ phase: 'processing', pct: 100 });
     } catch (err) {
       setState({ phase: 'error', pct: 0, detail: err.message });
@@ -547,7 +538,7 @@ const VideoSheet = ({ replay, onClose }) => {
         <>
           {state.phase === 'error' && <ErrorLine text={state.detail} />}
           <Button onClick={() => fileRef.current?.click()} style={{ width: '100%' }}>
-            {replay.stream_uid ? 'Replace video' : 'Choose video file'}
+            {(replay.video_key || replay.stream_uid) ? 'Replace video' : 'Choose video file'}
           </Button>
           <input ref={fileRef} type="file" accept="video/*" onChange={pick} style={{ display: 'none' }} />
         </>
@@ -564,8 +555,8 @@ const VideoSheet = ({ replay, onClose }) => {
       )}
       {state.phase === 'processing' && (
         <div style={{ fontSize: 13.5, color: T.cream, fontFamily: fontBody, lineHeight: 1.6 }}>
-          Uploaded. Cloudflare is processing it — it becomes playable in the
-          app automatically, usually within a couple of minutes.
+          Uploaded and stored. The video is playable in the app now — publish
+          the replay if it isn't live yet.
         </div>
       )}
     </Sheet>

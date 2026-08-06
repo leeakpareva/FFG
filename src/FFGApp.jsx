@@ -1585,14 +1585,20 @@ const ReplayViewer = ({ replay, onBack, openUser }) => {
   const [pos, setPos] = useState(Math.round((readWatched()[replay.id] || 0) * total));
   const [playing, setPlaying] = useState(false);
   const { getToken } = useAuth();
-  /* Real video: ask the API for a signed Stream token and swap the poster
-     for the player. Replays without a video keep the poster timeline. */
-  const [videoSrc, setVideoSrc] = useState(null);
+  /* Real video: ask the API where to play from. Natively stored replays
+     return a /media src that streams (with seeking) from our own storage;
+     a legacy Stream uid returns a signed token instead. Replays without a
+     video keep the poster timeline. */
+  const [video, setVideo] = useState(null); // { kind: 'file'|'stream', src }
   useEffect(() => {
     if (!replay.has_video) return;
     let live = true;
     createApi(getToken).playReplay(replay.id)
-      .then(({ token }) => { if (live) setVideoSrc(`https://iframe.videodelivery.net/${token}`); })
+      .then(({ src, token }) => {
+        if (!live) return;
+        if (src) setVideo({ kind: "file", src: mediaUrl(src) });
+        else if (token) setVideo({ kind: "stream", src: `https://iframe.videodelivery.net/${token}` });
+      })
       .catch(() => {});
     return () => { live = false; };
   }, [replay.id, replay.has_video, getToken]);
@@ -1624,15 +1630,25 @@ const ReplayViewer = ({ replay, onBack, openUser }) => {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {videoSrc ? (
+        {video ? (
           <div style={{ position: "relative", background: "#000", aspectRatio: "16 / 9" }}>
-            <iframe
-              src={videoSrc}
-              title={replay.title}
-              style={{ border: "none", position: "absolute", inset: 0, width: "100%", height: "100%" }}
-              allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture"
-              allowFullScreen
-            />
+            {video.kind === "file" ? (
+              <video
+                src={video.src}
+                controls
+                playsInline
+                poster={replay.image_url || undefined}
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+              />
+            ) : (
+              <iframe
+                src={video.src}
+                title={replay.title}
+                style={{ border: "none", position: "absolute", inset: 0, width: "100%", height: "100%" }}
+                allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
+            )}
           </div>
         ) : (
         <div style={{ position: "relative", background: "#000" }}>
