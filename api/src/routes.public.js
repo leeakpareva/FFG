@@ -78,8 +78,15 @@ publicRouter.post('/apply', async (req, res) => {
   if (limited(ip)) return res.status(429).json({ error: 'Too many applications from this connection — try again later.' });
 
   const str = (v, max) => String(v ?? '').trim().slice(0, max);
-  const firstName = str(b.first_name, 60);
-  const lastName = str(b.last_name, 60);
+
+  /* Transitional: the previously-deployed site form sends only name/email/
+     phone/about. While Vercel blocks the deploy that carries the full form,
+     that shape files as a minimal part one — the rest arrives via part two
+     and review. Remove once the new site is live. */
+  const legacy = !b.first_name && !b.last_name && b.name;
+
+  let firstName = str(b.first_name, 60);
+  let lastName = str(b.last_name, 60);
   const cleanEmail = str(b.email, 200).toLowerCase();
   const phone = str(b.phone, 40);
   const nationality = str(b.nationality, 60);
@@ -90,38 +97,54 @@ publicRouter.post('/apply', async (req, res) => {
   const roleTitle = str(b.role_title, 120);
   const about = str(b.about, 400);
   const referredBy = str(b.referred_by, 120);
+  let dob = null;
 
-  const missing = [];
-  if (!firstName) missing.push('first name');
-  if (!lastName) missing.push('last name');
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cleanEmail)) missing.push('a valid email address');
-  if (!phone) missing.push('contact number');
-  if (!nationality) missing.push('nationality');
-  if (!organisation) missing.push('organisation');
-  if (!roleTitle) missing.push('role');
-  if (!about) missing.push('why you want to join');
-  if (missing.length) {
-    return res.status(400).json({ error: `Please complete: ${missing.join(', ')}.` });
+  if (legacy) {
+    const parts = str(b.name, 120).split(/\s+/).filter(Boolean);
+    firstName = parts[0] || '';
+    lastName = parts.slice(1).join(' ');
+    const missing = [];
+    if (!firstName) missing.push('your name');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cleanEmail)) missing.push('a valid email address');
+    if (!phone) missing.push('contact number');
+    if (!about) missing.push('why you want to join');
+    if (missing.length) {
+      return res.status(400).json({ error: `Please complete: ${missing.join(', ')}.` });
+    }
+  } else {
+    const missing = [];
+    if (!firstName) missing.push('first name');
+    if (!lastName) missing.push('last name');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cleanEmail)) missing.push('a valid email address');
+    if (!phone) missing.push('contact number');
+    if (!nationality) missing.push('nationality');
+    if (!organisation) missing.push('organisation');
+    if (!roleTitle) missing.push('role');
+    if (!about) missing.push('why you want to join');
+    if (missing.length) {
+      return res.status(400).json({ error: `Please complete: ${missing.join(', ')}.` });
+    }
+
+    if (identifiesAs && !IDENTITIES.includes(identifiesAs)) return res.status(400).json({ error: 'Please choose how you identify from the list.' });
+    if (!DESCRIPTORS.includes(descriptor)) return res.status(400).json({ error: 'Please choose how you would describe yourself.' });
+    if (!INDUSTRIES.includes(industry)) return res.status(400).json({ error: 'Please choose your industry.' });
+
+    // 18+ is a condition of applying, so it is checked here as well as in the
+    // browser: a form control is a courtesy, not a rule.
+    dob = new Date(str(b.date_of_birth, 10));
+    if (Number.isNaN(dob.getTime())) return res.status(400).json({ error: 'Please give your date of birth.' });
+    const age = ageOn(dob);
+    if (age < 18) return res.status(400).json({ error: 'You must be 18 or over to apply.' });
+    if (age > 120) return res.status(400).json({ error: 'Please check your date of birth.' });
+
+    // The privacy consent is the lawful basis for holding any of this.
+    // (Legacy applicants give it at part two, which requires it.)
+    if (b.privacy_agreed !== true) {
+      return res.status(400).json({ error: 'Please agree to the Privacy Policy to continue.' });
+    }
   }
 
-  if (identifiesAs && !IDENTITIES.includes(identifiesAs)) return res.status(400).json({ error: 'Please choose how you identify from the list.' });
-  if (!DESCRIPTORS.includes(descriptor)) return res.status(400).json({ error: 'Please choose how you would describe yourself.' });
-  if (!INDUSTRIES.includes(industry)) return res.status(400).json({ error: 'Please choose your industry.' });
-
-  // 18+ is a condition of applying, so it is checked here as well as in the
-  // browser: a form control is a courtesy, not a rule.
-  const dob = new Date(str(b.date_of_birth, 10));
-  if (Number.isNaN(dob.getTime())) return res.status(400).json({ error: 'Please give your date of birth.' });
-  const age = ageOn(dob);
-  if (age < 18) return res.status(400).json({ error: 'You must be 18 or over to apply.' });
-  if (age > 120) return res.status(400).json({ error: 'Please check your date of birth.' });
-
-  // The privacy consent is the lawful basis for holding any of this.
-  if (b.privacy_agreed !== true) {
-    return res.status(400).json({ error: 'Please agree to the Privacy Policy to continue.' });
-  }
-
-  const cleanName = `${firstName} ${lastName}`;
+  const cleanName = [firstName, lastName].filter(Boolean).join(' ');
   // The applicant's private way back in to finish part two.
   const token = crypto.randomBytes(24).toString('base64url');
 
@@ -134,15 +157,16 @@ publicRouter.post('/apply', async (req, res) => {
           organisation, role_title, referred_by, marketing_opt_in,
           privacy_agreed_at, status, detail_token, details_sent_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-               now(), 'awaiting_details', $17, now())
+               $17, 'awaiting_details', $18, now())
        RETURNING id, created_at`,
       [
-        cleanName, firstName, lastName, cleanEmail, phone, about,
+        cleanName, firstName, lastName || null, cleanEmail, phone, about,
         str(b.referral, 24) || null,
-        dob.toISOString().slice(0, 10),
-        nationality, identifiesAs || null, descriptor, industry,
-        organisation, roleTitle, referredBy || null,
-        b.marketing_opt_in === true, token,
+        dob ? dob.toISOString().slice(0, 10) : null,
+        nationality || null, identifiesAs || null, descriptor || null, industry || null,
+        organisation || null, roleTitle || null, referredBy || null,
+        b.marketing_opt_in === true,
+        legacy ? null : new Date(), token,
       ]
     );
     application = rows[0];
