@@ -532,21 +532,33 @@ adminRouter.delete('/articles/:id', async (req, res) => {
 
 adminRouter.get('/events', async (_req, res) => {
   const { rows } = await q(`
-    SELECT e.*, (SELECT count(*)::int FROM event_attendees a WHERE a.event_id = e.id) AS attendee_count
+    SELECT e.*,
+           (SELECT count(*)::int FROM event_attendees a WHERE a.event_id = e.id)
+         + (SELECT count(*)::int FROM event_guests g WHERE g.event_id = e.id) AS attendee_count
       FROM events e ORDER BY e.starts_at NULLS LAST, e.created_at DESC`);
   res.json({ events: rows });
 });
 
-/** Who's coming: every member who RSVP'd or bought a seat, newest first. */
+/**
+ * Who's coming: members who RSVP'd or bought a seat, plus guests who
+ * reserved from the public website, newest first.
+ */
 adminRouter.get('/events/:id/attendees', async (req, res) => {
-  const { rows } = await q(`
-    SELECT m.id, m.name, m.handle, m.email, a.rsvp_at,
-           EXISTS (SELECT 1 FROM payments p
-                    WHERE p.event_id = a.event_id AND p.member_id = a.member_id AND p.status = 'paid') AS paid
-      FROM event_attendees a JOIN members m ON m.id = a.member_id
-     WHERE a.event_id = $1
-     ORDER BY a.rsvp_at DESC`, [req.params.id]);
-  res.json({ attendees: rows });
+  const [members, guests] = await Promise.all([
+    q(`SELECT m.id, m.name, m.handle, m.email, a.rsvp_at,
+              EXISTS (SELECT 1 FROM payments p
+                       WHERE p.event_id = a.event_id AND p.member_id = a.member_id AND p.status = 'paid') AS paid
+         FROM event_attendees a JOIN members m ON m.id = a.member_id
+        WHERE a.event_id = $1
+        ORDER BY a.rsvp_at DESC`, [req.params.id]),
+    q(`SELECT id, name, email, created_at AS rsvp_at
+         FROM event_guests WHERE event_id = $1 ORDER BY created_at DESC`, [req.params.id])
+      .catch(() => ({ rows: [] })),
+  ]);
+  res.json({
+    attendees: members.rows,
+    guests: guests.rows,
+  });
 });
 
 adminRouter.post('/events', async (req, res) => {

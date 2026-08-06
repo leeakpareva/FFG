@@ -74,6 +74,38 @@ export function createApi(getToken) {
       }));
     },
 
+    /**
+     * Big videos travel in sequential 32MB parts (Cloudflare caps one
+     * request at ~100MB) and are assembled server-side. onProgress: 0..100.
+     */
+    async uploadVideo(file, onProgress) {
+      const begin = await json(await fetch(`${API_BASE}/api/media/video/begin`, {
+        method: 'POST', headers: await auth(),
+      }));
+      const { upload_id, chunk_bytes } = begin;
+      const parts = Math.max(1, Math.ceil(file.size / chunk_bytes));
+      for (let i = 0; i < parts; i++) {
+        const blob = file.slice(i * chunk_bytes, Math.min((i + 1) * chunk_bytes, file.size));
+        const res = await fetch(`${API_BASE}/api/media/video/part/${upload_id}/${i}`, {
+          method: 'PUT',
+          headers: { ...(await auth()), 'Content-Type': 'application/octet-stream' },
+          body: blob,
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `part ${i + 1}/${parts} failed`);
+        }
+        onProgress?.(Math.round(((i + 1) / parts) * 95)); // the last 5% is the store
+      }
+      const done = await json(await fetch(`${API_BASE}/api/media/video/finish`, {
+        method: 'POST',
+        headers: { ...(await auth()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ upload_id }),
+      }));
+      onProgress?.(100);
+      return done;
+    },
+
     /** The member directory — the real people, not sample content. */
     async listMembers() {
       return json(await fetch(`${API_BASE}/api/members`, { headers: await auth() }));
@@ -321,7 +353,7 @@ export function createApi(getToken) {
 
 /** Client-side guard rails, mirrored server-side. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;         // images (full-res photos)
-export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;         // video clips
+export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;        // video, chunked upload
 export const ACCEPTED_IMAGE_TYPES = 'image/jpeg,image/png,image/webp,image/gif';
 export const ACCEPTED_VIDEO_TYPES = 'video/mp4,video/webm,video/quicktime';
 export const ACCEPTED_MEDIA_TYPES = `${ACCEPTED_IMAGE_TYPES},${ACCEPTED_VIDEO_TYPES}`;
@@ -345,7 +377,7 @@ export function validateMedia(file) {
   if (!file) return 'No file selected.';
   if (isVideoFile(file)) {
     if (file.size > MAX_VIDEO_BYTES) {
-      return `That video is ${(file.size / 1024 / 1024).toFixed(0)}MB. The limit is 100MB.`;
+      return `That video is ${(file.size / 1024 / 1024).toFixed(0)}MB. The limit is 1GB.`;
     }
     return null;
   }

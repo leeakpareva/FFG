@@ -237,33 +237,60 @@ function Events() {
   );
 }
 
-/** The guest list: who has RSVP'd or bought a seat, and when. */
+/** The guest list: member RSVPs plus reservations from the public website. */
 const AttendeesSheet = ({ event, onClose }) => {
-  const [attendees, setAttendees] = useState(null);
+  const [data, setData] = useState(null);
   useEffect(() => {
-    api.eventAttendees(event.id).then(({ attendees }) => setAttendees(attendees)).catch(() => setAttendees([]));
+    api.eventAttendees(event.id)
+      .then(({ attendees, guests }) => setData({ attendees: attendees || [], guests: guests || [] }))
+      .catch(() => setData({ attendees: [], guests: [] }));
   }, [event.id]);
+
+  const PersonRow = ({ a, first, guest }) => (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px',
+      borderTop: first ? 'none' : `1px solid ${T.line}`,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: fontBody, fontWeight: 700, fontSize: 13.5, color: T.cream }}>{a.name}</div>
+        <div style={{ fontFamily: fontBody, fontSize: 12, color: T.dim, ...clip }}>{a.email || a.handle}</div>
+      </div>
+      {guest && (
+        <span style={{
+          fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', color: T.connect,
+          background: `${T.connect}16`, padding: '3px 9px', borderRadius: 999, fontFamily: fontBody,
+        }}>WEBSITE</span>
+      )}
+      {a.paid && <StatusChip status="paid" />}
+      <div style={{ fontFamily: fontBody, fontSize: 11.5, color: T.dim, whiteSpace: 'nowrap' }}>
+        {a.rsvp_at ? new Date(a.rsvp_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''}
+      </div>
+    </div>
+  );
+
   return (
     <Sheet title={`${event.name} — attending`} onClose={onClose}>
-      {!attendees && <EmptyState title="Loading…" />}
-      {attendees && !attendees.length && (
-        <EmptyState title="No one yet" hint="Members who tap RSVP (or buy a seat) appear here the moment they do." />
+      {!data && <EmptyState title="Loading…" />}
+      {data && !data.attendees.length && !data.guests.length && (
+        <EmptyState title="No one yet"
+          hint="Members who tap RSVP (or buy a seat) and visitors who reserve on the website appear here the moment they do." />
       )}
-      {attendees && attendees.map((a, i) => (
-        <div key={a.id} style={{
-          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px',
-          borderTop: i ? `1px solid ${T.line}` : 'none',
-        }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: fontBody, fontWeight: 700, fontSize: 13.5, color: T.cream }}>{a.name}</div>
-            <div style={{ fontFamily: fontBody, fontSize: 12, color: T.dim, ...clip }}>{a.email || a.handle}</div>
+      {data && data.attendees.length > 0 && (
+        <>
+          <div style={{ fontFamily: fontBody, fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: T.dim, margin: '2px 0 4px' }}>
+            MEMBERS · {data.attendees.length}
           </div>
-          {a.paid && <StatusChip status="paid" />}
-          <div style={{ fontFamily: fontBody, fontSize: 11.5, color: T.dim, whiteSpace: 'nowrap' }}>
-            {a.rsvp_at ? new Date(a.rsvp_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''}
+          {data.attendees.map((a, i) => <PersonRow key={a.id} a={a} first={!i} />)}
+        </>
+      )}
+      {data && data.guests.length > 0 && (
+        <>
+          <div style={{ fontFamily: fontBody, fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: T.dim, margin: '14px 0 4px' }}>
+            FROM THE WEBSITE · {data.guests.length}
           </div>
-        </div>
-      ))}
+          {data.guests.map((a, i) => <PersonRow key={a.id} a={a} first={!i} guest />)}
+        </>
+      )}
     </Sheet>
   );
 };

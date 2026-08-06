@@ -249,6 +249,76 @@ publicRouter.post('/apply/track', async (req, res) => {
   res.status(204).end();
 });
 
+/* --------------------------------------------------------- public events */
+
+/**
+ * The events page on the public website. Public facts only: what, where,
+ * when — no host contact details, no member data.
+ */
+publicRouter.get('/public/events', async (_req, res) => {
+  const { rows } = await q(`
+    SELECT e.id, e.name, e.venue, e.day, e.month, e.time_label, e.tag,
+           e.about, e.image_key, e.price_pence, e.starts_at,
+           (SELECT count(*)::int FROM event_attendees a WHERE a.event_id = e.id)
+         + (SELECT count(*)::int FROM event_guests g WHERE g.event_id = e.id) AS going
+      FROM events e
+     ORDER BY e.starts_at NULLS LAST, e.created_at DESC`);
+  res.set('Cache-Control', 'public, max-age=60');
+  res.json({
+    events: rows.map(r => ({
+      ...r,
+      image_key: undefined,
+      image_url: r.image_key ? `/media/${r.image_key}` : null,
+    })),
+  });
+});
+
+/** A visitor reserves a seat: name + email, one per event. Honeypot + rate limit. */
+const guestCounts = new Map(); // ip -> { count, first }
+publicRouter.post('/public/events/:id/rsvp', async (req, res) => {
+  const b = req.body || {};
+  if (b.company) return res.status(201).json({ ok: true }); // honeypot
+
+  const ip = req.headers['x-real-ip'] || req.socket.remoteAddress || '?';
+  const c = guestCounts.get(ip);
+  if (!c || Date.now() - c.first > 60 * 60 * 1000) guestCounts.set(ip, { count: 1, first: Date.now() });
+  else if (++c.count > 10) return res.status(429).json({ error: 'Too many requests — try again later.' });
+
+  const name = String(b.name || '').trim().slice(0, 120);
+  const email = String(b.email || '').trim().toLowerCase().slice(0, 200);
+  if (!name) return res.status(400).json({ error: 'Please give your name.' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Please give a valid email address.' });
+
+  const event = await q('SELECT id, name, venue, day, month, time_label, starts_at, price_pence FROM events WHERE id = $1', [req.params.id]);
+  if (!event.rows[0]) return res.status(404).json({ error: 'That event no longer exists.' });
+  const e = event.rows[0];
+
+  try {
+    await q('INSERT INTO event_guests (event_id, name, email) VALUES ($1, $2, $3)', [e.id, name, email]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(201).json({ ok: true }); // already on the list
+    throw err;
+  }
+
+  const when = [e.day && e.month ? `${e.day} ${e.month}` : null, e.time_label].filter(Boolean).join(' · ');
+  sendMail({
+    to: email,
+    subject: `Your place: ${e.name}`,
+    html: ffgEmail(`
+      <p style="margin:0 0 6px;text-align:center;font-size:10px;letter-spacing:3px;color:#8A867C;">SEE YOU THERE</p>
+      <h1 style="margin:6px 0 18px;text-align:center;font-family:Georgia,serif;font-weight:normal;font-size:26px;line-height:1.2;color:#17171B;">
+        ${escapeHtml(e.name)}
+      </h1>
+      <p style="margin:0 0 14px;">Dear ${escapeHtml(name.split(' ')[0])},</p>
+      <p style="margin:0 0 14px;">Thank you — your interest is registered${when ? ` for <strong>${escapeHtml(when)}</strong>` : ''}${e.venue ? ` at ${escapeHtml(e.venue)}` : ''}.</p>
+      ${e.price_pence ? `<p style="margin:0 0 14px;">This is a ticketed event — the team will be in touch with the details.</p>` : `<p style="margin:0 0 14px;">We will send a reminder the day before.</p>`}
+      <p style="margin:14px 0 0;">Forbes Family Group</p>
+    `, { footer: 'full' }),
+  });
+
+  res.status(201).json({ ok: true });
+});
+
 publicRouter.get('/apply/options', (_req, res) => {
   res.set('Cache-Control', 'public, max-age=3600');
   res.json({ income_brackets: INCOME_BRACKETS, heard_about: HEARD_ABOUT });

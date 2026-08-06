@@ -619,7 +619,7 @@ const PostViewer = ({ post, member, openUser, onClose, canDelete, onDeleted }) =
           <LikeRow likes={post.likes} comments={commentCount} liked={post.liked}
             onToggle={() => createApi(getToken).likePost(post.id)}
             saved={post.saved} onSave={() => createApi(getToken).savePost(post.id)}
-            onComments={() => setCommentsOpen(true)} />
+            onComments={() => setCommentsOpen(true)} onShare={() => sharePost(post)} />
           {commentsOpen && (
             <CommentsSheet postId={post.id} onClose={() => setCommentsOpen(false)} onCount={setCommentCount} />
           )}
@@ -1486,7 +1486,7 @@ const ArticleReader = ({ article, onBack, openUser }) => {
           {meta && (
             <LikeRow likes={meta.likes} comments={meta.comments} liked={meta.liked}
               onToggle={() => createApi(getToken).likeArticle(article.id)}
-              onComments={() => setCommentsOpen(true)} />
+              onComments={() => setCommentsOpen(true)} onShare={shareArticle} />
           )}
           {commentsOpen && (
             <CommentsSheet articleId={article.id} onClose={() => setCommentsOpen(false)}
@@ -2561,7 +2561,15 @@ const AIBriefing = ({ openConcierge, member }) => {
   );
 };
 
-const LikeRow = ({ likes, comments, liked: likedInitial = false, onToggle, saved: savedInitial = false, onSave, onComments }) => {
+/** Share a feed post: native sheet where the platform has one, clipboard elsewhere. */
+const sharePost = (p) => {
+  const url = `${window.location.origin}/`;
+  const text = (p?.text || "A post from the FFG Connect community").slice(0, 200);
+  if (navigator.share) navigator.share({ title: "FFG Connect", text, url }).catch(() => {});
+  else navigator.clipboard?.writeText(`${text} — ${url}`);
+};
+
+const LikeRow = ({ likes, comments, liked: likedInitial = false, onToggle, saved: savedInitial = false, onSave, onComments, onShare }) => {
   const [saved, setSaved] = useState(savedInitial);
   const toggleSave = async () => {
     if (!onSave) return;
@@ -2604,7 +2612,8 @@ const LikeRow = ({ likes, comments, liked: likedInitial = false, onToggle, saved
         cursor: onComments ? "pointer" : "default",
       }}>
         <MessageCircle size={19} strokeWidth={2} />{comments}</span>
-      <Share2 size={18} strokeWidth={2} />
+      <Share2 size={18} strokeWidth={2} onClick={onShare}
+        style={{ cursor: onShare ? "pointer" : "default" }} />
       <Bookmark size={18} strokeWidth={2} onClick={toggleSave}
         color={saved ? T.gold : T.dim} fill={saved ? T.gold : "none"}
         style={{ marginLeft: "auto", cursor: onSave ? "pointer" : "default", transition: "color 0.15s" }} />
@@ -2820,7 +2829,7 @@ const Post = ({ p, openUser, member, onDeleted }) => {
       <LikeRow likes={p.likes} comments={commentCount} liked={p.liked}
         onToggle={p.id ? () => createApi(getToken).likePost(p.id) : null}
         saved={p.saved} onSave={p.id ? () => createApi(getToken).savePost(p.id) : null}
-        onComments={p.id ? () => setCommentsOpen(true) : null} />
+        onComments={p.id ? () => setCommentsOpen(true) : null} onShare={() => sharePost(p)} />
 
       {commentsOpen && (
         <CommentsSheet postId={p.id} onClose={() => setCommentsOpen(false)} onCount={setCommentCount} />
@@ -2842,6 +2851,7 @@ const Composer = ({ member, onPost, onClose }) => {
   const [preview, setPreview] = useState(null);  // local object URL, shown instantly
   const [isVid, setIsVid] = useState(false);     // the preview is a video
   const [busy, setBusy] = useState(false);
+  const [pct, setPct] = useState(null);   // chunked video progress, 0..100
   const [err, setErr] = useState(null);
   const fileRef = React.useRef(null);
   const { getToken } = useAuth();
@@ -2860,11 +2870,16 @@ const Composer = ({ member, onPost, onClose }) => {
 
     setErr(null);
     setPic(null);                          // an upload replaces any stock pick
-    setIsVid(isVideoFile(file));
+    const vid = isVideoFile(file);
+    setIsVid(vid);
     setPreview(URL.createObjectURL(file));
     setBusy(true);
+    setPct(null);
     try {
-      const saved = await createApi(getToken).uploadImage(file, { kind: "post" });
+      // Video rides the chunked pipeline (1GB cap); photos post in one go.
+      const saved = vid
+        ? await createApi(getToken).uploadVideo(file, setPct)
+        : await createApi(getToken).uploadImage(file, { kind: "post" });
       // Absolute, so the image also resolves when the app is served from a
       // different origin than the API (the Vercel build).
       setUpload({ ...saved, url: mediaUrl(saved.url) });
@@ -2873,6 +2888,7 @@ const Composer = ({ member, onPost, onClose }) => {
       setPreview(p => { if (p) URL.revokeObjectURL(p); return null; });
     } finally {
       setBusy(false);
+      setPct(null);
     }
   };
 
@@ -3061,7 +3077,7 @@ const Composer = ({ member, onPost, onClose }) => {
             fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14.5,
             transition: "background 0.25s",
           }}>
-          {busy ? "Uploading media…"
+          {busy ? (pct != null ? `Uploading video… ${pct}%` : "Uploading media…")
             : postState === "posting" ? "Posting…"
             : postState === "done" ? "Posted ✓"
             : postState === "error" ? "Try again"
@@ -3660,7 +3676,8 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
         {event.about && (
         <div style={{ padding: "0 18px 18px" }}>
           <div style={{ fontSize: 11, letterSpacing: "0.14em", color: T.gold, fontWeight: 600, fontFamily: "'Inter',sans-serif", marginBottom: 8 }}>ABOUT</div>
-          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{event.about}</p>
+          {/* pre-wrap: the admin's paragraphs and line breaks survive intact */}
+          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, color: T.cream, fontFamily: "'Inter',sans-serif", whiteSpace: "pre-wrap" }}>{event.about}</p>
         </div>
         )}
 

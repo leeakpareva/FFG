@@ -130,7 +130,48 @@ async function remindTick() {
   }
 }
 
+/* Guests from the public website get the same day-before email. */
+async function remindGuestsTick() {
+  let rows;
+  try {
+    ({ rows } = await q(`
+      SELECT g.id, g.name, g.email, e.name AS event_name, e.starts_at, e.venue
+        FROM event_guests g
+        JOIN events e ON e.id = g.event_id
+       WHERE g.reminded_at IS NULL
+         AND e.starts_at IS NOT NULL
+         AND e.starts_at BETWEEN now() + interval '20 hours' AND now() + interval '28 hours'`));
+  } catch { return; } // un-migrated box
+
+  for (const r of rows) {
+    const claimed = await q(
+      `UPDATE event_guests SET reminded_at = now() WHERE id = $1 AND reminded_at IS NULL RETURNING 1`,
+      [r.id]);
+    if (!claimed.rows[0] || !r.email) continue;
+
+    const when = new Date(r.starts_at).toLocaleString('en-GB', {
+      weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+      timeZone: 'Europe/London',
+    });
+    sendMail({
+      to: r.email,
+      subject: `Tomorrow: ${r.event_name}`,
+      html: ffgEmail(`
+        <p style="margin:0 0 6px;text-align:center;font-size:10px;letter-spacing:3px;color:#8A867C;">EVENT REMINDER</p>
+        <h1 style="margin:6px 0 18px;text-align:center;font-family:Georgia,serif;font-weight:normal;font-size:26px;line-height:1.2;color:#17171B;">
+          ${escapeHtml(r.event_name)}
+        </h1>
+        <p style="margin:0 0 14px;">Dear ${escapeHtml((r.name || '').split(' ')[0] || 'guest')},</p>
+        <p style="margin:0 0 14px;">A reminder that you have registered for tomorrow:</p>
+        <p style="margin:0;"><strong>${escapeHtml(when)}</strong>${r.venue ? `<br/>${escapeHtml(r.venue)}` : ''}</p>
+      `, { footer: 'full' }),
+    });
+  }
+}
+
 export function startEventReminders() {
-  setInterval(() => remindTick().catch(e => console.error('[reminders]', e.message)), REMINDER_TICK_MS);
-  remindTick().catch(e => console.error('[reminders]', e.message));
+  const tick = () => Promise.all([remindTick(), remindGuestsTick()])
+    .catch(e => console.error('[reminders]', e.message));
+  setInterval(tick, REMINDER_TICK_MS);
+  tick();
 }
