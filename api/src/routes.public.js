@@ -15,6 +15,8 @@ import {
   sendMail, ffgEmail, emailButton, emailStep, escapeHtml, applyNotify,
   APP_BASE, SITE_BASE,
 } from './mailer.js';
+import { stripeReady, createApplicationHold, PLAN_LABELS } from './stripe.js';
+import { sendReviewerAlert } from './applicationEmails.js';
 
 export const publicRouter = Router();
 
@@ -378,71 +380,67 @@ publicRouter.post('/apply/complete', async (req, res) => {
     return res.status(400).json({ error: 'Please confirm you are happy with how we will use your information.' });
   }
 
+  /* The membership plan: the fee is authorised now, taken only on approval. */
+  const plan = ['annual', 'quarterly'].includes(b.plan) ? b.plan : null;
+  if (stripeReady && !plan) {
+    return res.status(400).json({ error: 'Please choose a membership plan.' });
+  }
+
   await q(
     `UPDATE applications
         SET story = $2, contribution = $3, worth_it = $4, income_bracket = $5,
             linkedin_url = $6, instagram_handle = $7, website_url = $8,
-            heard_about = $9, status = 'pending', details_done_at = now(),
+            heard_about = $9, plan = $10, status = 'pending', details_done_at = now(),
             detail_token = NULL
       WHERE id = $1`,
     [app.id, story, contribution, worthIt, income || null,
-     linkedin, instagram || null, website || null, heard || null]
+     linkedin, instagram || null, website || null, heard || null, plan]
   );
 
-  /* Now it is a whole application, so now the reviewers hear about it. */
-  const refCode = app.referral;
-  let referrer = app.referred_by || null;
-  if (refCode) {
-    const ref = await q('SELECT name FROM members WHERE id = $1', [refCode]);
-    if (ref.rows[0]) referrer = `${ref.rows[0].name} (member link)`;
+  if (stripeReady && plan) {
+    /* Hold the fee on their card. Reviewers hear about the application only
+       when the hold lands (the Stripe webhook) — a whole application now
+       means details AND payment. */
+    try {
+      const { session, amount } = await createApplicationHold({
+        applicationId: app.id, plan, email: app.email, siteBase: SITE_BASE,
+      });
+      await q(
+        `UPDATE applications SET amount_pence = $2, payment_status = 'unpaid', checkout_url = $3
+          WHERE id = $1`,
+        [app.id, amount, session.url]
+      );
+      // The way back if they close the payment page: the link in their inbox.
+      sendMail({
+        to: app.email,
+        subject: 'One last step — authorise your membership fee',
+        html: ffgEmail(`
+          <p style="margin:0 0 6px;text-align:center;font-size:10px;letter-spacing:3px;color:#8A867C;">MEMBERSHIP APPLICATION</p>
+          <h1 style="margin:6px 0 18px;text-align:center;font-family:Georgia,serif;font-weight:normal;font-size:26px;line-height:1.2;color:#17171B;">
+            One last step
+          </h1>
+          <p style="margin:0 0 14px;">Dear ${escapeHtml(app.first_name || app.name.split(' ')[0])},</p>
+          <p style="margin:0 0 14px;">Your application is written. The final step is to authorise
+          your membership fee — <strong>${escapeHtml(PLAN_LABELS[plan])}</strong>.</p>
+          <p style="margin:0 0 14px;">The amount is <strong>held on your card, not taken</strong>.
+          If your application is not successful the hold is released in full. If you are
+          approved, the payment completes and your membership begins.</p>
+          ${emailButton(session.url, 'Authorise my membership fee')}
+          <p style="margin:0;color:#8A867C;font-size:13px;text-align:center;">Nothing reaches our
+          review team until this step is done.</p>
+        `, { footer: 'full' }),
+      });
+      return res.status(201).json({ ok: true, checkout_url: session.url });
+    } catch (e) {
+      console.error('[apply] payment hold failed:', e.message);
+      /* Stripe hiccup: never lose the application — review proceeds unpaid
+         and the team arranges payment at approval. */
+    }
   }
 
-  const reviewers = applyNotify();
-  if (reviewers.length) {
-    const facts = [
-      ['Email', app.email],
-      ['Phone', app.phone],
-      ['Nationality', app.nationality],
-      ['Identifies as', app.identifies_as || '—'],
-      ['Describes self as', app.descriptor],
-      ['Industry', app.industry],
-      ['Organisation', app.organisation],
-      ['Role', app.role_title],
-      ['Income bracket', income || '—'],
-      ['LinkedIn', linkedin],
-      ['Instagram', instagram ? `@${instagram}` : '—'],
-      ['Website', website || '—'],
-      ['Heard about us', heard || '—'],
-      ['Referred by', referrer || '—'],
-      ['Marketing opt-in', app.marketing_opt_in ? 'Yes' : 'No'],
-    ].map(([k, v]) => `
-      <tr>
-        <td style="padding:6px 14px 6px 0;color:#8A867C;font-size:13px;white-space:nowrap;vertical-align:top;">${k}</td>
-        <td style="padding:6px 0;font-size:14px;word-break:break-word;">${escapeHtml(v)}</td>
-      </tr>`).join('');
-
-    const answer = (label, value) => `
-      <p style="margin:16px 0 4px;color:#8A867C;font-size:13px;">${label}</p>
-      <p style="margin:0;">${escapeHtml(value)}</p>`;
-
-    sendMail({
-      to: reviewers.join(', '),
-      cc: 'lee@navada.info',
-      subject: `Membership application ready to review: ${app.name}`,
-      html: ffgEmail(`
-        <p style="margin:0 0 14px;"><strong>${escapeHtml(app.name)}</strong> has completed their
-        application for FFG Connect. It is ready for your decision.</p>
-        <table cellpadding="0" cellspacing="0" style="margin:6px 0 2px;">${facts}</table>
-        ${answer('Why they want to join', app.about)}
-        ${answer('Their story', story)}
-        ${answer('What they would bring, and hope to gain', contribution)}
-        ${answer('What would make membership worth it', worthIt)}
-        ${emailButton(`${APP_BASE}/admin`, 'Approve or decline')}
-        <p style="margin:0;color:#8A867C;font-size:13px;">Approving sets up their membership and
-        emails them the welcome and the link to Connect. Declining sends a short, polite note.</p>
-      `),
-    });
-  }
+  /* No Stripe (or it failed): the application is whole now, tell the reviewers. */
+  const fresh = await q('SELECT * FROM applications WHERE id = $1', [app.id]);
+  sendReviewerAlert(fresh.rows[0]).catch(e => console.error('[apply] reviewer alert failed:', e.message));
 
   res.status(201).json({ ok: true });
 });

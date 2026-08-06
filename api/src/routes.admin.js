@@ -25,7 +25,10 @@ import {
   sendMail, ffgEmail, emailButton, escapeHtml, APP_BASE,
   APP_STORE_URL, PLAY_STORE_URL,
 } from './mailer.js';
-import { createPayment, stripeReady, stripeTestMode, payId } from './stripe.js';
+import {
+  createPayment, stripeReady, stripeTestMode, payId,
+  captureApplicationPayment, releaseApplicationPayment, PLAN_LABELS,
+} from './stripe.js';
 import { reindexAll, embedReady } from './embed.js';
 
 export const adminRouter = Router();
@@ -1007,6 +1010,32 @@ adminRouter.post('/applications/:id/approve', async (req, res) => {
     [app.id, member?.id || null, req.admin?.username || 'admin']
   );
 
+  /* Take the membership fee that has been held since they applied. A lapsed
+     hold (cards release after ~7 days) must never block the approval — the
+     member is in either way, and the team follows up on payment. */
+  let paymentLine = '';
+  if (app.payment_status === 'held' && app.payment_intent_id) {
+    try {
+      await captureApplicationPayment(app.payment_intent_id);
+      await q(`UPDATE applications SET payment_status = 'captured' WHERE id = $1`, [app.id]);
+      const label = PLAN_LABELS[app.plan] || 'your membership';
+      const amount = app.amount_pence ? `£${(app.amount_pence / 100).toFixed(app.amount_pence % 100 ? 2 : 0)}` : '';
+      paymentLine = `
+        <p style="margin:0 0 14px;padding:10px 14px;background:#F7F4EE;border-radius:10px;font-size:13.5px;">
+          Your membership payment of <strong>${amount}</strong> (${escapeHtml(label)}) has now
+          been taken from the card you authorised. Your membership is active.
+        </p>`;
+    } catch (e) {
+      console.error('[admin approve] capture failed:', e.message);
+      await q(`UPDATE applications SET payment_status = 'capture_failed' WHERE id = $1`, [app.id]);
+      paymentLine = `
+        <p style="margin:0 0 14px;padding:10px 14px;background:#F7F4EE;border-radius:10px;font-size:13.5px;">
+          The payment hold on your card had lapsed before we could complete it — nothing has
+          been taken. The team will be in touch to arrange your membership payment.
+        </p>`;
+    }
+  }
+
   /* The store links only appear once the app is actually published; until
      then the web app is the destination and works on any phone. */
   const stores = [
@@ -1027,6 +1056,7 @@ adminRouter.post('/applications/:id/approve', async (req, res) => {
       <p style="margin:0 0 14px;">
         Your application has been reviewed and approved. We are glad to have you.
       </p>
+      ${paymentLine}
       <p style="margin:0 0 14px;">
         Connect is the members&rsquo; floor: rooms you can walk into, events worth
         clearing your diary for, and introductions that do not happen anywhere else.
@@ -1055,11 +1085,31 @@ adminRouter.post('/applications/:id/approve', async (req, res) => {
 adminRouter.post('/applications/:id/reject', async (req, res) => {
   const { rows } = await q(
     `UPDATE applications SET status = 'rejected', decided_by = $2, decided_at = now()
-      WHERE id = $1 AND status IN ('pending', 'shortlisted') RETURNING name, email`,
+      WHERE id = $1 AND status IN ('pending', 'shortlisted')
+    RETURNING name, email, payment_status, payment_intent_id`,
     [req.params.id, req.admin?.username || 'admin']
   );
   const app = rows[0];
   if (!app) return res.status(404).json({ error: 'no pending application with that id' });
+
+  /* Release the hold: the fee was never taken, and now it never will be. */
+  let releaseLine = '';
+  if (app.payment_status === 'held' && app.payment_intent_id) {
+    try {
+      await releaseApplicationPayment(app.payment_intent_id);
+      await q(`UPDATE applications SET payment_status = 'released' WHERE id = $1`, [req.params.id]);
+      releaseLine = `
+      <p style="margin:0 0 14px;">The hold on your card has been released in full — no payment
+      has been taken. Depending on your bank, it can take a few days to show.</p>`;
+    } catch (e) {
+      console.error('[admin reject] release failed:', e.message);
+      /* A lapsed hold releases itself; either way the money was never taken. */
+      await q(`UPDATE applications SET payment_status = 'released' WHERE id = $1`, [req.params.id]);
+      releaseLine = `
+      <p style="margin:0 0 14px;">No payment has been taken; any hold on your card releases
+      automatically within a few days.</p>`;
+    }
+  }
 
   sendMail({
     to: app.email,
@@ -1072,6 +1122,7 @@ adminRouter.post('/applications/:id/reject', async (req, res) => {
       <p style="margin:0 0 14px;">Membership of Connect is limited, and we are unable to offer
       you a place at this time. Applications reopen regularly, and we would be glad to see
       yours again.</p>
+      ${releaseLine}
       <p style="margin:14px 0 0;">Forbes Family Group</p>
     `),
   });

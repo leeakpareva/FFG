@@ -26,6 +26,39 @@ const ago = (iso) => {
   return `${Math.round(hrs / 24)}d ago`;
 };
 
+/**
+ * Where the membership fee stands. A held card authorisation lapses after
+ * about 7 days — the chip counts, so the queue shows what needs deciding
+ * first.
+ */
+const PaymentChip = ({ r }) => {
+  if (!r.payment_status || r.payment_status === 'none') return null;
+  const amount = r.amount_pence ? `£${(r.amount_pence / 100).toFixed(0)}` : '';
+  const planWord = r.plan === 'annual' ? 'ANNUAL' : r.plan === 'quarterly' ? 'QUARTERLY' : '';
+  const heldDays = r.payment_held_at
+    ? Math.floor((Date.now() - new Date(r.payment_held_at).getTime()) / 86400000)
+    : null;
+  const map = {
+    unpaid: { c: T.dim, label: 'AWAITING PAYMENT' },
+    held: {
+      c: heldDays !== null && heldDays >= 5 ? '#B3261E' : T.gold,
+      label: `HELD ${amount} ${planWord}${heldDays !== null ? ` · DAY ${heldDays + 1} OF 7` : ''}`,
+    },
+    captured: { c: T.community, label: `PAID ${amount} ${planWord}` },
+    released: { c: T.connect, label: 'HOLD RELEASED' },
+    capture_failed: { c: '#B3261E', label: 'PAYMENT FAILED — FOLLOW UP' },
+  };
+  const m = map[r.payment_status];
+  if (!m) return null;
+  return (
+    <span style={{
+      fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', fontFamily: fontBody,
+      color: m.c, background: `${m.c}16`, borderRadius: 999, padding: '3px 10px',
+      whiteSpace: 'nowrap',
+    }}>{m.label.trim()}</span>
+  );
+};
+
 export default function Applications() {
   const [rows, setRows] = useState(null);
   const [reviewers, setReviewers] = useState([]);
@@ -94,6 +127,7 @@ export default function Applications() {
                 COMPLETE
               </span>
             )}
+            <PaymentChip r={r} />
             {r.assigned_to && (
               <span style={{
                 fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em', fontFamily: fontBody,

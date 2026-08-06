@@ -205,11 +205,11 @@ export function createApi(getToken) {
       return json(await fetch(`${API_BASE}/api/posts`, { headers: await auth() }));
     },
 
-    async createPost({ body, pillar, image_key, tags }) {
+    async createPost({ body, pillar, image_key, poster_key, tags }) {
       return json(await fetch(`${API_BASE}/api/posts`, {
         method: 'POST',
         headers: { ...(await auth()), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body, pillar, image_key, tags }),
+        body: JSON.stringify({ body, pillar, image_key, poster_key, tags }),
       }));
     },
 

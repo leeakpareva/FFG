@@ -31,7 +31,7 @@ const TAGS_SQL = `
     WHERE pt.post_id = p.id) AS tags`;
 
 const POST_SELECT = `
-  SELECT p.id, p.member_id, p.body, p.pillar, p.image_key, p.stat_label,
+  SELECT p.id, p.member_id, p.body, p.pillar, p.image_key, p.poster_key, p.stat_label,
          p.stat_value, p.posted_at,
          m.name AS author_name, m.handle AS author_handle, m.verified AS author_verified,
          av.storage_key AS author_avatar_key,
@@ -56,6 +56,7 @@ const shapePost = (r) => ({
   text: r.body,
   pillar: r.pillar,
   image_url: r.image_key ? `/media/${r.image_key}` : null,
+  poster_url: r.poster_key ? `/media/${r.poster_key}` : null,
   stat: r.stat_label ? { label: r.stat_label, value: r.stat_value } : null,
   likes: r.likes,
   liked: r.liked_by_me,
@@ -126,21 +127,22 @@ socialRouter.get('/members/:id/tagged', requireMember, async (req, res) => {
 });
 
 socialRouter.post('/posts', requireMember, async (req, res) => {
-  const { body, pillar, image_key, tags } = req.body || {};
+  const { body, pillar, image_key, poster_key, tags } = req.body || {};
   if (!body || !String(body).trim()) return res.status(400).json({ error: 'body is required' });
   if (!['Capital', 'Community', 'Connect'].includes(pillar)) return res.status(400).json({ error: 'bad pillar' });
 
-  /* An image key can only be one of your own uploads — otherwise any member
-     could hang someone else's photo on their post. */
-  if (image_key) {
+  /* A media key can only be one of your own uploads — otherwise any member
+     could hang someone else's file on their post. Same rule for the video
+     cover photo. */
+  for (const key of [image_key, poster_key].filter(Boolean)) {
     const owned = await q('SELECT 1 FROM media WHERE storage_key = $1 AND owner_id = $2 AND uploaded',
-      [image_key, req.member.id]);
-    if (!owned.rows[0]) return res.status(403).json({ error: 'that image is not yours' });
+      [key, req.member.id]);
+    if (!owned.rows[0]) return res.status(403).json({ error: 'that file is not yours' });
   }
 
   const { rows } = await q(
-    `INSERT INTO posts (member_id, body, pillar, image_key) VALUES ($1,$2,$3,$4) RETURNING id`,
-    [req.member.id, String(body).trim().slice(0, 2000), pillar, image_key || null]
+    `INSERT INTO posts (member_id, body, pillar, image_key, poster_key) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [req.member.id, String(body).trim().slice(0, 2000), pillar, image_key || null, poster_key || null]
   );
   track(req.member.id, 'post_created', { post: rows[0].id });
   embedPost(rows[0].id, body); // async — ranking learns this post shortly

@@ -17,6 +17,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { q } from './db.js';
 import { track } from './track.js';
+import { sendReviewerAlert } from './applicationEmails.js';
 
 const KEY = process.env.STRIPE_SECRET_KEY;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
@@ -27,6 +28,53 @@ export const stripeTestMode = !!KEY && KEY.startsWith('sk_test_');
 const stripe = KEY ? new Stripe(KEY) : null;
 
 export const payId = () => 'pay_' + crypto.randomBytes(8).toString('hex');
+
+/* Membership pricing — the business facts, in one place. */
+export const PLAN_PRICES = { annual: 69900, quarterly: 19500 };
+export const PLAN_LABELS = {
+  annual: 'Annual membership — £699 per year',
+  quarterly: 'Quarterly membership — £195 every three months',
+};
+
+/**
+ * The membership fee, authorised but NOT taken (manual capture): Stripe
+ * holds the amount on the applicant's card. Approval captures it; rejection
+ * cancels it and the money never moves. Card holds lapse after ~7 days.
+ */
+export async function createApplicationHold({ applicationId, plan, email, siteBase }) {
+  if (!stripe) throw new Error('stripe not configured');
+  const amount = PLAN_PRICES[plan];
+  if (!amount) throw new Error('unknown plan');
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    customer_email: email,
+    client_reference_id: `app_${applicationId}`,
+    payment_intent_data: {
+      capture_method: 'manual',
+      metadata: { application_id: applicationId },
+    },
+    metadata: { application_id: applicationId },
+    line_items: [{
+      quantity: 1,
+      price_data: {
+        currency: 'gbp',
+        unit_amount: amount,
+        product_data: { name: `FFG Connect — ${PLAN_LABELS[plan]}` },
+      },
+    }],
+    success_url: `${siteBase}/apply/thanks`,
+    cancel_url: `${siteBase}/apply/thanks?cancelled=1`,
+  });
+  return { session, amount };
+}
+
+/** Approval: take the held fee. Throws if the hold has lapsed. */
+export const captureApplicationPayment = (paymentIntentId) =>
+  stripe.paymentIntents.capture(paymentIntentId);
+
+/** Rejection: cancel the hold — the money never left their account. */
+export const releaseApplicationPayment = (paymentIntentId) =>
+  stripe.paymentIntents.cancel(paymentIntentId);
 
 /**
  * Creates the ledger row and, when Stripe is connected, the Checkout link
@@ -119,6 +167,24 @@ stripeWebhookRouter.post('/', express.raw({ type: 'application/json' }), async (
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
+
+    /* A membership application hold: the card is authorised, the money is
+       NOT taken. Mark it held and — only now — tell the reviewers there is
+       a whole application waiting. */
+    if (session.metadata?.application_id) {
+      const { rows } = await q(
+        `UPDATE applications
+            SET payment_status = 'held', payment_intent_id = $2, payment_held_at = now()
+          WHERE id = $1 AND payment_status IN ('unpaid', 'none')
+        RETURNING *`,
+        [session.metadata.application_id, session.payment_intent || null]
+      );
+      if (rows[0]) {
+        sendReviewerAlert(rows[0]).catch(e => console.error('[stripe] reviewer alert failed:', e.message));
+      }
+      return res.json({ received: true });
+    }
+
     const ledgerId = session.client_reference_id;
     const { rows } = await q(
       `UPDATE payments

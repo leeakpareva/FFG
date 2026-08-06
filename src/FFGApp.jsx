@@ -547,6 +547,7 @@ const PostGrid = ({ posts, emptyTitle, emptyHint, onOpen }) => {
             isVideoUrl(p.image_url) ? (
               <>
                 <video src={mediaUrl(p.image_url)} muted playsInline preload="metadata"
+                  poster={p.poster_url ? mediaUrl(p.poster_url) : undefined}
                   style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 <div style={{
                   position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 11,
@@ -600,6 +601,7 @@ const PostViewer = ({ post, member, openUser, onClose, canDelete, onDeleted }) =
         {post.image_url && (
           isVideoUrl(post.image_url)
             ? <video src={mediaUrl(post.image_url)} controls playsInline autoPlay muted
+                poster={post.poster_url ? mediaUrl(post.poster_url) : undefined}
                 style={{ width: "100%", maxHeight: "60vh", background: "#000", display: "block" }} />
             : <img src={mediaUrl(post.image_url)} alt="" style={{ width: "100%", display: "block" }} />
         )}
@@ -675,9 +677,10 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
   }, [user.id, gridVersion, getToken]);
 
   /** Publish from your own page — same pipeline as the feed composer. */
-  const publishFromProfile = async ({ text, imageKey, tags }) => {
+  const publishFromProfile = async ({ text, imageKey, posterKey, tags }) => {
     await createApi(getToken).createPost({
-      body: text, pillar: 'Community', image_key: imageKey || undefined, tags,
+      body: text, pillar: 'Community', image_key: imageKey || undefined,
+      poster_key: posterKey || undefined, tags,
     });
     setToast("Posted to the feed");
     setGridVersion(v => v + 1); // the grid below should show it immediately
@@ -2782,6 +2785,7 @@ const Post = ({ p, openUser, member, onDeleted }) => {
         <div style={{ borderRadius: 16, overflow: "hidden", marginBottom: 12, border: `1px solid ${T.line}` }}>
           {isVideoUrl(p.imageUrl) ? (
             <video src={p.imageUrl} controls playsInline preload="metadata"
+              poster={p.posterUrl || undefined}
               style={{ width: "100%", display: "block", maxHeight: 420, background: "#000" }} />
           ) : (
             <img src={p.imageUrl || EVENT_PICS[p.image] || p.image} alt="" style={{ width: "100%", display: "block" }} />
@@ -2852,8 +2856,10 @@ const Composer = ({ member, onPost, onClose }) => {
   const [isVid, setIsVid] = useState(false);     // the preview is a video
   const [busy, setBusy] = useState(false);
   const [pct, setPct] = useState(null);   // chunked video progress, 0..100
+  const [poster, setPoster] = useState(null); // { url } — the video's cover photo
   const [err, setErr] = useState(null);
   const fileRef = React.useRef(null);
+  const posterRef = React.useRef(null);
   const { getToken } = useAuth();
 
   // Revoke the object URL when it changes or the composer closes, or the
@@ -2870,6 +2876,7 @@ const Composer = ({ member, onPost, onClose }) => {
 
     setErr(null);
     setPic(null);                          // an upload replaces any stock pick
+    setPoster(null);
     const vid = isVideoFile(file);
     setIsVid(vid);
     setPreview(URL.createObjectURL(file));
@@ -2883,6 +2890,16 @@ const Composer = ({ member, onPost, onClose }) => {
       // Absolute, so the image also resolves when the app is served from a
       // different origin than the API (the Vercel build).
       setUpload({ ...saved, url: mediaUrl(saved.url) });
+      if (vid) {
+        /* The automatic cover: a frame from the video itself. Silent on
+           failure — the member can still choose one by hand. */
+        const frame = await captureVideoPoster(file);
+        if (frame) {
+          const cover = new File([frame], "cover.jpg", { type: "image/jpeg" });
+          const savedPoster = await createApi(getToken).uploadImage(cover, { kind: "post" }).catch(() => null);
+          if (savedPoster) setPoster({ ...savedPoster, url: mediaUrl(savedPoster.url) });
+        }
+      }
     } catch (e2) {
       setErr(e2.message || "Upload failed. Please try again.");
       setPreview(p => { if (p) URL.revokeObjectURL(p); return null; });
@@ -2892,10 +2909,27 @@ const Composer = ({ member, onPost, onClose }) => {
     }
   };
 
+  /** A hand-picked cover photo replaces the automatic one. */
+  const pickPoster = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const problem = validateImage(file);
+    if (problem) { setErr(problem); return; }
+    setErr(null);
+    try {
+      const saved = await createApi(getToken).uploadImage(file, { kind: "post" });
+      setPoster({ ...saved, url: mediaUrl(saved.url) });
+    } catch (e2) {
+      setErr(e2.message || "Could not upload that cover photo.");
+    }
+  };
+
   const clearUpload = () => {
     setIsVid(false);
     setPreview(p => { if (p) URL.revokeObjectURL(p); return null; });
     setUpload(null);
+    setPoster(null);
     setErr(null);
   };
 
@@ -2967,6 +3001,27 @@ const Composer = ({ member, onPost, onClose }) => {
                 border: "none", cursor: "pointer", background: "#00000099",
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}><X size={16} color="#FFF" /></button>
+            )}
+            {/* The video's cover photo: auto-captured from the video, replaceable. */}
+            {isVid && upload && !busy && (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 10, marginTop: 8,
+                background: T.card, border: `1px solid ${T.line}`, borderRadius: 12, padding: "8px 10px",
+              }}>
+                {poster
+                  ? <img src={poster.url} alt="" style={{ width: 52, height: 36, objectFit: "cover", borderRadius: 8, border: `1px solid ${T.line}` }} />
+                  : <div style={{ width: 52, height: 36, borderRadius: 8, border: `1px dashed ${T.line}`, display: "flex", alignItems: "center", justifyContent: "center" }}><Camera size={14} color={T.dim} /></div>}
+                <span style={{ flex: 1, fontSize: 12, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+                  {poster ? "Cover photo" : "No cover yet"}
+                </span>
+                <button onClick={() => posterRef.current?.click()} style={{
+                  border: `1px solid ${T.line}`, background: "transparent", cursor: "pointer",
+                  borderRadius: 999, padding: "6px 12px", color: T.goldSoft,
+                  fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 12,
+                }}>{poster ? "Change cover" : "Add cover"}</button>
+                <input ref={posterRef} type="file" accept="image/jpeg,image/png,image/webp"
+                  onChange={pickPoster} style={{ display: "none" }} />
+              </div>
             )}
           </div>
         ) : (
@@ -3059,6 +3114,7 @@ const Composer = ({ member, onPost, onClose }) => {
               await onPost({
                 text: text.trim() || "📸",
                 imageKey: upload?.url ? upload.url.replace(/^.*\/media\//, "") : null,
+                posterKey: isVid && poster?.url ? poster.url.replace(/^.*\/media\//, "") : null,
                 tags: tagged,
               });
               setPostState("done");
@@ -3256,7 +3312,38 @@ const shapeFeedPost = (p, myId) => ({
   id: p.id, uid: p.uid, me: p.uid === myId,
   time: sinceLabel(p.posted_at), pillar: p.pillar, text: p.text,
   imageUrl: p.image_url ? mediaUrl(p.image_url) : null, image: null,
+  posterUrl: p.poster_url ? mediaUrl(p.poster_url) : null,
   likes: p.likes, liked: p.liked, saved: p.saved, comments: 0, stat: p.stat, tags: p.tags || [],
+});
+
+/**
+ * Grab a still from a local video file — the automatic cover photo. Seeks a
+ * beat in so the frame is not a black fade-up. Resolves null when the
+ * browser will not play the codec; the post simply goes cover-less.
+ */
+const captureVideoPoster = (file) => new Promise((resolve) => {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  const done = (blob) => { URL.revokeObjectURL(url); video.remove(); resolve(blob); };
+  const timer = setTimeout(() => done(null), 8000);
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.src = url;
+  video.addEventListener("loadedmetadata", () => {
+    video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
+  });
+  video.addEventListener("seeked", () => {
+    try {
+      const canvas = document.createElement("canvas");
+      const scale = Math.min(1, 1280 / (video.videoWidth || 1280));
+      canvas.width = Math.round((video.videoWidth || 720) * scale);
+      canvas.height = Math.round((video.videoHeight || 1280) * scale);
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => { clearTimeout(timer); done(blob); }, "image/jpeg", 0.85);
+    } catch { clearTimeout(timer); done(null); }
+  });
+  video.addEventListener("error", () => { clearTimeout(timer); done(null); });
 });
 
 /* ------------------------------------------------------------- web push */
@@ -3386,9 +3473,10 @@ const Feed = ({ openUser, openConcierge, openRoom, member }) => {
     return () => { live = false; window.removeEventListener("ffg:rt", onRt); };
   }, [getToken, member?.id]);
 
-  const publish = async ({ text, imageKey, tags }) => {
+  const publish = async ({ text, imageKey, posterKey, tags }) => {
     const created = await createApi(getToken).createPost({
-      body: text, pillar: 'Community', image_key: imageKey || undefined, tags,
+      body: text, pillar: 'Community', image_key: imageKey || undefined,
+      poster_key: posterKey || undefined, tags,
     });
     setPosts(prev => [shapeFeedPost(created, member?.id), ...(prev || [])]);
   };
