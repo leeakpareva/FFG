@@ -424,11 +424,59 @@ function Assets() {
 
 /* --------------------------------------------------------------- shell */
 
+/**
+ * The application funnel: how many people started the form, finished part
+ * one, finished part two, were approved — last 30 days. Read next to the
+ * campaign UTM links, this is what says whether a campaign worked.
+ */
+function Funnel() {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    api.marketingFunnel().then(setData).catch(() => setData(false));
+  }, []);
+  if (data === null || data === false) return null;
+
+  const started = Math.max(data.beacons.apply_started, data.applications.part1);
+  const steps = [
+    ['Started the form', started],
+    ['Finished part one', data.applications.part1],
+    ['Finished part two', data.applications.part2],
+    ['Approved', data.applications.approved],
+  ];
+  const top = Math.max(1, steps[0][1]);
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.1em', color: T.dim, fontFamily: fontBody, marginBottom: 12 }}>
+        APPLICATION FUNNEL — LAST 30 DAYS
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+        {steps.map(([label, n], i) => (
+          <div key={label}>
+            <div style={{ fontFamily: fontHead, fontWeight: 900, fontSize: 24, color: i === steps.length - 1 ? T.goldSoft : T.cream }}>
+              {n}
+              {i > 0 && steps[i - 1][1] > 0 && (
+                <span style={{ fontSize: 12, fontWeight: 700, color: T.dim, marginLeft: 6 }}>
+                  {Math.round((n / steps[i - 1][1]) * 100)}%
+                </span>
+              )}
+            </div>
+            <div style={{ fontFamily: fontBody, fontSize: 11.5, color: T.dim, marginTop: 3 }}>{label}</div>
+            <div style={{ height: 4, borderRadius: 2, background: T.ink, marginTop: 8, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.round((n / top) * 100)}%`, background: `linear-gradient(90deg, ${T.gold}, ${T.goldSoft})` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 export default function Marketing() {
   const [tab, setTab] = useState('campaigns');
   return (
     <div>
       <SectionTitle eyebrow="Promotion" title="Marketing" />
+      <Funnel />
       <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
         {[['campaigns', 'Campaigns'], ['assets', 'Asset library']].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{

@@ -226,6 +226,8 @@ export default function Website() {
   const [saved, setSaved] = useState(null);   // server overrides {key: value}
   const [meta, setMeta] = useState({});       // {key: {updated_at, updated_by}}
   const [drafts, setDrafts] = useState(null); // editable copies per section
+  const [preview, setPreview] = useState(false);
+  const [previewNonce, setPreviewNonce] = useState(0); // bump = reload the iframe
 
   const load = () => api.siteContent().then(({ content, meta }) => {
     setSaved(content);
@@ -238,6 +240,13 @@ export default function Website() {
   }).catch(() => { setSaved({}); setDrafts(structuredClone(DEFAULTS)); });
 
   useEffect(() => { load(); }, []);
+
+  /* After a save the site serves the new content within seconds; the preview
+     reloads itself so the editor sees the result without leaving the page. */
+  const savedAndRefresh = () => {
+    load();
+    setTimeout(() => setPreviewNonce(n => n + 1), 1200);
+  };
 
   if (!drafts) return <EmptyState title="Loading…" />;
 
@@ -260,7 +269,7 @@ export default function Website() {
     setDraft: bind(key),
     overridden: saved[key] !== undefined,
     meta: meta[key],
-    onSaved: load,
+    onSaved: savedAndRefresh,
   });
 
   return (
@@ -268,12 +277,44 @@ export default function Website() {
       <SectionTitle
         eyebrow="Public website"
         title="Website"
-        right={<a href={SITE_URL} target="_blank" rel="noreferrer" style={{ color: T.goldSoft, fontFamily: fontBody, fontSize: 13, fontWeight: 700 }}>View live site ↗</a>}
+        right={
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+            <button onClick={() => setPreview(p => !p)} style={{
+              border: `1px solid ${preview ? T.gold : T.line}`, borderRadius: 999, cursor: 'pointer',
+              background: preview ? `${T.gold}18` : 'transparent', padding: '7px 15px',
+              color: preview ? T.goldSoft : T.dim, fontFamily: fontBody, fontSize: 12.5, fontWeight: 700,
+            }}>{preview ? 'Hide preview' : 'Show preview'}</button>
+            <a href={SITE_URL} target="_blank" rel="noreferrer" style={{ color: T.goldSoft, fontFamily: fontBody, fontSize: 13, fontWeight: 700 }}>View live site ↗</a>
+          </div>
+        }
       />
       <div style={{ fontFamily: fontBody, fontSize: 13, color: T.dim, margin: '0 0 18px', lineHeight: 1.6 }}>
         Every word and photo below is live on the website within a minute of saving.
         "Photo description" is what screen readers and Google read — a short sentence about what's in the picture.
       </div>
+
+      {preview && (
+        <Card style={{ marginBottom: 14, padding: 10, position: 'sticky', top: 8, zIndex: 5 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, padding: '0 4px' }}>
+            <span style={{ fontFamily: fontBody, fontSize: 11.5, fontWeight: 700, letterSpacing: '0.1em', color: T.dim }}>
+              LIVE SITE — reloads itself after every save
+            </span>
+            <button onClick={() => setPreviewNonce(n => n + 1)} style={{
+              border: 'none', background: 'none', cursor: 'pointer', color: T.goldSoft,
+              fontFamily: fontBody, fontSize: 12.5, fontWeight: 700,
+            }}>Refresh ↻</button>
+          </div>
+          <iframe
+            key={previewNonce}
+            src={`${SITE_URL}?admin-preview=${previewNonce}`}
+            title="Live site preview"
+            style={{
+              width: '100%', height: 440, border: `1px solid ${T.line}`, borderRadius: 12,
+              background: '#FFF', display: 'block',
+            }}
+          />
+        </Card>
+      )}
 
       <Section title="Hero" hint="The full-screen opening. Each headline line sits on its own row — add or remove lines freely; the last line renders in gold." {...common('hero')}>
         <Field label="Headline (one line per row)">

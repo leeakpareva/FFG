@@ -230,6 +230,25 @@ const HEARD_ABOUT = [
 ];
 
 /** The lists part two offers, so the form and the server agree. */
+/**
+ * Anonymous funnel beacons from the public site: started the form, finished
+ * part one, finished part two. A step and a timestamp — no PII, so no
+ * consent question arises. Lightly rate-limited per IP.
+ */
+const beaconCounts = new Map(); // ip -> { count, first }
+publicRouter.post('/apply/track', async (req, res) => {
+  const step = String(req.body?.step || '');
+  if (!['apply_started', 'apply_part1_done', 'apply_part2_done'].includes(step)) {
+    return res.status(204).end(); // never give a probe a signal
+  }
+  const ip = req.headers['x-real-ip'] || req.socket.remoteAddress || '?';
+  const c = beaconCounts.get(ip);
+  if (!c || Date.now() - c.first > 60 * 60 * 1000) beaconCounts.set(ip, { count: 1, first: Date.now() });
+  else if (++c.count > 60) return res.status(204).end();
+  try { await q('INSERT INTO site_events (step) VALUES ($1)', [step]); } catch { /* un-migrated */ }
+  res.status(204).end();
+});
+
 publicRouter.get('/apply/options', (_req, res) => {
   res.set('Cache-Control', 'public, max-age=3600');
   res.json({ income_brackets: INCOME_BRACKETS, heard_about: HEARD_ABOUT });

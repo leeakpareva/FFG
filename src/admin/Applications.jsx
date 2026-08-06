@@ -28,11 +28,15 @@ const ago = (iso) => {
 
 export default function Applications() {
   const [rows, setRows] = useState(null);
+  const [reviewers, setReviewers] = useState([]);
   const [busy, setBusy] = useState(null);   // id being decided
   const [error, setError] = useState('');
 
   const load = () => api.applications().then(({ applications }) => setRows(applications)).catch(() => setRows([]));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.reviewers().then(({ reviewers }) => setReviewers(reviewers)).catch(() => {});
+  }, []);
 
   const decide = async (id, action, name) => {
     const verb = action === 'approve' ? 'Approve' : 'Reject';
@@ -49,7 +53,32 @@ export default function Applications() {
     }
   };
 
+  const shortlist = async (id, undo) => {
+    setBusy(id);
+    try {
+      await (undo ? api.unshortlistApplication(id) : api.shortlistApplication(id));
+      await load();
+    } catch (e) { setError(e.message); } finally { setBusy(null); }
+  };
+
+  const assign = async (id, who) => {
+    try {
+      await api.assignApplication(id, who || null);
+      await load();
+    } catch (e) { setError(e.message); }
+  };
+
+  const addNote = async (id) => {
+    const text = window.prompt('Note for the team (the applicant never sees this):');
+    if (!text?.trim()) return;
+    try {
+      await api.addApplicationNote(id, text.trim());
+      await load();
+    } catch (e) { setError(e.message); }
+  };
+
   const pending = (rows || []).filter(r => r.status === 'pending');
+  const shortlisted = (rows || []).filter(r => r.status === 'shortlisted');
   const started = (rows || []).filter(r => r.status === 'awaiting_details');
   const decided = (rows || []).filter(r => r.status === 'approved' || r.status === 'rejected');
 
@@ -63,6 +92,14 @@ export default function Applications() {
             {r.details_done_at && r.status === 'pending' && (
               <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em', color: T.community, fontFamily: fontBody }}>
                 COMPLETE
+              </span>
+            )}
+            {r.assigned_to && (
+              <span style={{
+                fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em', fontFamily: fontBody,
+                color: T.connect, background: `${T.connect}16`, borderRadius: 999, padding: '3px 10px',
+              }}>
+                {(reviewers.find(rv => rv.username === r.assigned_to)?.name || r.assigned_to).toUpperCase()}
               </span>
             )}
             {r.referred_by_name && (
@@ -144,21 +181,63 @@ export default function Applications() {
               ].filter(Boolean).join(' · ')}
             </div>
           )}
-          {r.status !== 'pending' && (
+          {(r.status === 'approved' || r.status === 'rejected') && (
             <div style={{ fontFamily: fontBody, fontSize: 12, color: T.dim, marginTop: 8 }}>
               {r.status} by {r.decided_by || 'admin'} · {ago(r.decided_at)}
             </div>
           )}
+
+          {(r.notes || []).length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontFamily: fontBody, fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', color: T.dim, marginBottom: 4 }}>
+                TEAM NOTES
+              </div>
+              {r.notes.map((n, i) => (
+                <div key={i} style={{
+                  fontFamily: fontBody, fontSize: 13, color: T.cream, lineHeight: 1.5,
+                  background: T.ink, borderRadius: 12, padding: '8px 12px', marginBottom: 6,
+                }}>
+                  {n.text}
+                  <span style={{ color: T.dim, fontSize: 11.5 }}> — {n.by}, {ago(n.at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        {r.status === 'pending' && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button disabled={busy === r.id} onClick={() => decide(r.id, 'approve', r.name)}>
-              {busy === r.id ? 'Working…' : 'Approve'}
-            </Button>
-            <Button kind="ghost" disabled={busy === r.id} onClick={() => decide(r.id, 'reject', r.name)}>
-              Reject
-            </Button>
+        {(r.status === 'pending' || r.status === 'shortlisted') && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch' }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button disabled={busy === r.id} onClick={() => decide(r.id, 'approve', r.name)}>
+                {busy === r.id ? 'Working…' : 'Approve'}
+              </Button>
+              <Button kind="ghost" disabled={busy === r.id} onClick={() => decide(r.id, 'reject', r.name)}>
+                Reject
+              </Button>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button kind="ghost" style={{ flex: 1, padding: '9px 12px', fontSize: 12.5 }}
+                      disabled={busy === r.id}
+                      onClick={() => shortlist(r.id, r.status === 'shortlisted')}>
+                {r.status === 'shortlisted' ? 'Back to queue' : 'Shortlist'}
+              </Button>
+              <Button kind="ghost" style={{ flex: 1, padding: '9px 12px', fontSize: 12.5 }}
+                      onClick={() => addNote(r.id)}>
+                Add note
+              </Button>
+            </div>
+            <select value={r.assigned_to || ''} onChange={e => assign(r.id, e.target.value)} style={{
+              padding: '9px 10px', borderRadius: 10, border: `1px solid ${T.line}`, background: T.card,
+              color: r.assigned_to ? T.cream : T.dim, fontSize: 12.5, fontFamily: fontBody,
+            }}>
+              <option value="">Unassigned</option>
+              {reviewers.map(rv => <option key={rv.username} value={rv.username}>{rv.name}</option>)}
+            </select>
           </div>
+        )}
+        {(r.status === 'approved' || r.status === 'rejected') && (
+          <Button kind="ghost" style={{ padding: '9px 12px', fontSize: 12.5 }} onClick={() => addNote(r.id)}>
+            Add note
+          </Button>
         )}
       </div>
     </Card>
@@ -179,6 +258,18 @@ export default function Applications() {
         <EmptyState title="No applications waiting" hint="Completed applications from the website appear here and by email." />
       )}
       {pending.map(r => <Row key={r.id} r={r} />)}
+
+      {shortlisted.length > 0 && (
+        <>
+          <div style={{
+            fontFamily: fontBody, fontWeight: 700, fontSize: 12, letterSpacing: '0.14em',
+            color: T.goldSoft, margin: '26px 0 12px',
+          }}>
+            SHORTLISTED
+          </div>
+          {shortlisted.map(r => <Row key={r.id} r={r} />)}
+        </>
+      )}
 
       {started.length > 0 && (
         <>

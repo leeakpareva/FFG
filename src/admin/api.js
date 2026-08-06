@@ -89,6 +89,12 @@ export const api = {
   applications: (status) => call(`/api/admin/applications${status ? `?status=${status}` : ''}`),
   approveApplication: (id) => call(`/api/admin/applications/${id}/approve`, { method: 'POST' }),
   rejectApplication: (id) => call(`/api/admin/applications/${id}/reject`, { method: 'POST' }),
+  shortlistApplication: (id) => call(`/api/admin/applications/${id}/shortlist`, { method: 'POST' }),
+  unshortlistApplication: (id) => call(`/api/admin/applications/${id}/unshortlist`, { method: 'POST' }),
+  assignApplication: (id, assigned_to) => call(`/api/admin/applications/${id}`, { method: 'PATCH', body: { assigned_to } }),
+  addApplicationNote: (id, text) => call(`/api/admin/applications/${id}/notes`, { method: 'POST', body: { text } }),
+  reviewers: () => call('/api/admin/reviewers'),
+  marketingFunnel: () => call('/api/admin/marketing/funnel'),
 
   siteContent: () => call('/api/admin/site-content'),
   saveSiteContent: (key, value) => call(`/api/admin/site-content/${key}`, { method: 'PUT', body: { value } }),

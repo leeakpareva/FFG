@@ -148,6 +148,25 @@ export function createApi(getToken) {
       }));
     },
 
+    /** Who's going: real attendees for the event page. */
+    async eventAttendees(id) {
+      return json(await fetch(`${API_BASE}/api/events/${id}/attendees`, { headers: await auth() }));
+    },
+
+    /* -------------------------------------------------------------- push */
+
+    async pushKey() {
+      return json(await fetch(`${API_BASE}/api/push/key`, { headers: await auth() }));
+    },
+
+    async pushSubscribe(subscription) {
+      return json(await fetch(`${API_BASE}/api/push/subscribe`, {
+        method: 'POST',
+        headers: { ...(await auth()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription }),
+      }));
+    },
+
     /* ------------------------------------------------------------ social */
 
     async listPosts() {

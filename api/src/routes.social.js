@@ -11,6 +11,7 @@ import { requireMember } from './auth.js';
 import { track, trackPing } from './track.js';
 import { embedPost } from './embed.js';
 import { notify } from './ws.js';
+import { pushToMember } from './push.js';
 
 export const socialRouter = Router();
 
@@ -434,11 +435,18 @@ socialRouter.post('/threads/:id/messages', requireMember, async (req, res) => {
   track(req.member.id, 'message_sent', { thread: req.params.id });
 
   /* Ring the other side's doorbell — their badge and open chat update now,
-     not on the next poll. */
+     not on the next poll. If their app is closed, web push carries it. */
   const other = await q(
     `SELECT CASE WHEN member_a = $2 THEN member_b ELSE member_a END AS other
        FROM threads WHERE id = $1`, [req.params.id, req.member.id]);
-  if (other.rows[0]) notify([other.rows[0].other], { type: 'dm', thread: req.params.id, from: req.member.id });
+  if (other.rows[0]) {
+    notify([other.rows[0].other], { type: 'dm', thread: req.params.id, from: req.member.id });
+    pushToMember(other.rows[0].other, {
+      type: 'dm',
+      title: `${req.member.name || 'A member'} messaged you`,
+      body: body.slice(0, 120),
+    }).catch(() => {});
+  }
 
   res.status(201).json({ id: rows[0].id, me: true, text: body, at: rows[0].created_at });
 });

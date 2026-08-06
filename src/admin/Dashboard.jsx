@@ -1,15 +1,26 @@
 /**
- * The MI screen. Four questions, four charts, no dual axes:
- * who is using the app, what are they doing, where do they gather,
- * and what has been paid.
+ * The MI screen. Four questions, no dual axes: who is using the app, what
+ * are they doing, where do they gather, and what has been paid.
+ *
+ * Charts are Chart.js (canvas): gradient fills, rounded bars, dark floating
+ * tooltips and eased animations. The palette is the validated CHART set from
+ * ui.jsx — slots are fixed, colors never cycle.
  */
 import React, { useEffect, useState } from 'react';
 import {
-  ResponsiveContainer, LineChart, Line, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-} from 'recharts';
+  Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement,
+  BarElement, ArcElement, Filler, Tooltip, Legend,
+} from 'chart.js';
+import { Line, Bar } from 'react-chartjs-2';
 import { T, CHART, Card, StatTile, SectionTitle, EmptyState, gbp, bytes, fontBody } from './ui.jsx';
 import { api } from './api.js';
+
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, Filler, Tooltip, Legend);
+
+ChartJS.defaults.font.family = "'Inter', sans-serif";
+ChartJS.defaults.font.size = 11;
+ChartJS.defaults.color = T.dim;
+ChartJS.defaults.animation = { duration: 900, easing: 'easeOutQuart' };
 
 /* Categorical slots are fixed — a type keeps its color whatever else is on
    screen. Anything not listed folds into "other", never a new hue. */
@@ -20,14 +31,49 @@ const TYPE_SLOTS = [
   ['concierge_ask', 'Concierge', CHART.cat[3]],
 ];
 
-const axisStyle = { fontSize: 11, fontFamily: fontBody, fill: T.dim };
-const tipStyle = {
-  contentStyle: { background: T.card, border: `1px solid ${T.line}`, borderRadius: 12, fontFamily: fontBody, fontSize: 12 },
-  labelStyle: { color: T.cream, fontWeight: 700 },
+/* One tooltip everywhere: dark card floating over the light UI. */
+const tooltip = {
+  backgroundColor: '#17171B',
+  titleColor: '#F7F4EE',
+  bodyColor: '#CFCBC2',
+  titleFont: { family: "'Inter', sans-serif", weight: 700, size: 12 },
+  bodyFont: { family: "'Inter', sans-serif", size: 12 },
+  padding: 10,
+  cornerRadius: 10,
+  displayColors: true,
+  boxWidth: 8,
+  boxHeight: 8,
+  boxPadding: 4,
+  usePointStyle: true,
+};
+
+const yGrid = { color: CHART.grid, drawTicks: false };
+const noGrid = { display: false };
+const axisTicks = { maxRotation: 0, autoSkipPadding: 12 };
+
+const baseOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: 'index', intersect: false },
+  plugins: { legend: { display: false }, tooltip },
+};
+
+/** Vertical gold gradient for area/bar fills, built per-chart-area. */
+const goldFill = (alphaTop = 0.55, alphaBottom = 0.04) => (context) => {
+  const { ctx, chartArea } = context.chart;
+  if (!chartArea) return `rgba(192,133,25,${alphaBottom})`;
+  const g = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+  g.addColorStop(0, `rgba(192,133,25,${alphaTop})`);
+  g.addColorStop(1, `rgba(192,133,25,${alphaBottom})`);
+  return g;
 };
 
 const day = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 const month = (d) => new Date(d).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+
+const ChartBox = ({ height = 220, children }) => (
+  <div style={{ position: 'relative', height }}>{children}</div>
+);
 
 export default function Dashboard() {
   const [overview, setOverview] = useState(null);
@@ -64,10 +110,9 @@ export default function Dashboard() {
   }
   const actionRows = [...byDay.values()];
   const activesRows = activity.actives.map(r => ({ day: day(r.day), members: r.members }));
-  const revenueRows = revenue.map(r => ({
-    month: month(r.month), paid: r.paid_pence / 100, pending: r.pending_pence / 100,
-  }));
   const minutesRows = (timespent?.daily || []).map(r => ({ day: day(r.day), minutes: r.minutes }));
+  const readArticles = (engagement?.articles || []).filter(a => a.reads > 0);
+  const activeRooms = (rooms || []).filter(r => r.joins > 0);
   const soc = engagement?.social || {};
 
   return (
@@ -112,15 +157,30 @@ export default function Dashboard() {
         <Card>
           <ChartTitle>Time in app — minutes per day, last 14 days</ChartTitle>
           {minutesRows.length ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={minutesRows} margin={{ top: 6, right: 10, bottom: 0, left: -22 }}>
-                <CartesianGrid stroke={CHART.grid} vertical={false} />
-                <XAxis dataKey="day" tick={axisStyle} tickLine={false} axisLine={{ stroke: T.line }} interval="preserveStartEnd" />
-                <YAxis tick={axisStyle} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip {...tipStyle} formatter={(v) => [`${v} min`, 'Time in app']} />
-                <Bar dataKey="minutes" name="Minutes" fill={CHART.single} stroke={T.card} strokeWidth={2} radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <ChartBox>
+              <Bar
+                data={{
+                  labels: minutesRows.map(r => r.day),
+                  datasets: [{
+                    label: 'Minutes',
+                    data: minutesRows.map(r => r.minutes),
+                    backgroundColor: goldFill(0.85, 0.35),
+                    hoverBackgroundColor: CHART.single,
+                    borderRadius: 7,
+                    borderSkipped: false,
+                    maxBarThickness: 26,
+                  }],
+                }}
+                options={{
+                  ...baseOptions,
+                  plugins: { ...baseOptions.plugins, tooltip: { ...tooltip, callbacks: { label: c => ` ${c.parsed.y} min` } } },
+                  scales: {
+                    x: { grid: noGrid, ticks: axisTicks, border: { color: T.line } },
+                    y: { grid: yGrid, border: { display: false }, ticks: { precision: 0 } },
+                  },
+                }}
+              />
+            </ChartBox>
           ) : <EmptyState title="No time recorded yet" hint="Starts filling in as members keep the app open." />}
           {timespent?.top?.length > 0 && (
             <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -136,83 +196,190 @@ export default function Dashboard() {
 
         <Card>
           <ChartTitle>Most-read articles</ChartTitle>
-          {engagement?.articles?.some(a => a.reads > 0) ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={engagement.articles.filter(a => a.reads > 0)} layout="vertical" margin={{ top: 6, right: 24, bottom: 0, left: 8 }}>
-                <CartesianGrid stroke={CHART.grid} horizontal={false} />
-                <XAxis type="number" tick={axisStyle} tickLine={false} axisLine={false} allowDecimals={false} />
-                <YAxis type="category" dataKey="title" width={150} tick={{ ...axisStyle, fill: T.cream }} tickLine={false} axisLine={false} />
-                <Tooltip {...tipStyle} />
-                <Bar dataKey="reads" name="Reads" fill={CHART.cat[3]} radius={[0, 4, 4, 0]} barSize={14} />
-              </BarChart>
-            </ResponsiveContainer>
+          {readArticles.length ? (
+            <ChartBox>
+              <Bar
+                data={{
+                  labels: readArticles.map(a => a.title),
+                  datasets: [{
+                    label: 'Reads',
+                    data: readArticles.map(a => a.reads),
+                    backgroundColor: `${CHART.cat[3]}CC`,
+                    hoverBackgroundColor: CHART.cat[3],
+                    borderRadius: 7,
+                    borderSkipped: false,
+                    maxBarThickness: 16,
+                  }],
+                }}
+                options={{
+                  ...baseOptions,
+                  indexAxis: 'y',
+                  interaction: { mode: 'nearest', intersect: false },
+                  scales: {
+                    x: { grid: yGrid, border: { display: false }, ticks: { precision: 0 } },
+                    y: { grid: noGrid, border: { display: false }, ticks: { color: T.cream, callback(v) {
+                      const label = this.getLabelForValue(v);
+                      return label.length > 24 ? label.slice(0, 23) + '…' : label;
+                    } } },
+                  },
+                }}
+              />
+            </ChartBox>
           ) : <EmptyState title="No reads yet" hint="Publish articles and this ranks them." />}
         </Card>
 
         <Card>
           <ChartTitle>Active members — last 30 days</ChartTitle>
           {activesRows.length ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={activesRows} margin={{ top: 6, right: 10, bottom: 0, left: -22 }}>
-                <CartesianGrid stroke={CHART.grid} vertical={false} />
-                <XAxis dataKey="day" tick={axisStyle} tickLine={false} axisLine={{ stroke: T.line }} interval="preserveStartEnd" />
-                <YAxis tick={axisStyle} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip {...tipStyle} />
-                <Line type="monotone" dataKey="members" name="Active members" stroke={CHART.single} strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartBox>
+              <Line
+                data={{
+                  labels: activesRows.map(r => r.day),
+                  datasets: [{
+                    label: 'Active members',
+                    data: activesRows.map(r => r.members),
+                    borderColor: CHART.single,
+                    borderWidth: 2.5,
+                    fill: true,
+                    backgroundColor: goldFill(0.4, 0.02),
+                    tension: 0.35,
+                    pointRadius: 0,
+                    pointHoverRadius: 5,
+                    pointHoverBackgroundColor: CHART.single,
+                    pointHoverBorderColor: '#FFF',
+                    pointHoverBorderWidth: 2,
+                  }],
+                }}
+                options={{
+                  ...baseOptions,
+                  scales: {
+                    x: { grid: noGrid, ticks: axisTicks, border: { color: T.line } },
+                    y: { grid: yGrid, border: { display: false }, ticks: { precision: 0 } },
+                  },
+                }}
+              />
+            </ChartBox>
           ) : <EmptyState title="No activity yet" hint="This fills in as members use the app." />}
         </Card>
 
         <Card>
           <ChartTitle>What members did</ChartTitle>
           {actionRows.length ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={actionRows} margin={{ top: 6, right: 10, bottom: 0, left: -22 }}>
-                <CartesianGrid stroke={CHART.grid} vertical={false} />
-                <XAxis dataKey="day" tick={axisStyle} tickLine={false} axisLine={{ stroke: T.line }} interval="preserveStartEnd" />
-                <YAxis tick={axisStyle} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip {...tipStyle} />
-                <Legend wrapperStyle={{ fontSize: 11, fontFamily: fontBody }} />
-                {TYPE_SLOTS.map(([key, label, color]) => (
-                  /* stroke = 2px surface gap between stacked segments */
-                  <Bar key={key} dataKey={key} name={label} stackId="a" fill={color}
-                       stroke={T.card} strokeWidth={2} radius={[3, 3, 0, 0]} />
-                ))}
-              </BarChart>
-            </ResponsiveContainer>
+            <ChartBox>
+              <Bar
+                data={{
+                  labels: actionRows.map(r => r.day),
+                  datasets: TYPE_SLOTS.map(([key, label, color]) => ({
+                    label,
+                    data: actionRows.map(r => r[key] || 0),
+                    backgroundColor: `${color}D9`,
+                    hoverBackgroundColor: color,
+                    borderRadius: 4,
+                    borderSkipped: false,
+                    borderColor: T.card,
+                    borderWidth: 1,
+                    maxBarThickness: 26,
+                    stack: 'a',
+                  })),
+                }}
+                options={{
+                  ...baseOptions,
+                  plugins: {
+                    ...baseOptions.plugins,
+                    legend: {
+                      display: true, position: 'bottom',
+                      labels: { usePointStyle: true, pointStyle: 'circle', boxWidth: 7, boxHeight: 7, padding: 14 },
+                    },
+                  },
+                  scales: {
+                    x: { stacked: true, grid: noGrid, ticks: axisTicks, border: { color: T.line } },
+                    y: { stacked: true, grid: yGrid, border: { display: false }, ticks: { precision: 0 } },
+                  },
+                }}
+              />
+            </ChartBox>
           ) : <EmptyState title="Nothing recorded yet" />}
         </Card>
 
         <Card>
           <ChartTitle>Room joins — last 30 days</ChartTitle>
-          {rooms.some(r => r.joins > 0) ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={rooms} layout="vertical" margin={{ top: 6, right: 24, bottom: 0, left: 8 }}>
-                <CartesianGrid stroke={CHART.grid} horizontal={false} />
-                <XAxis type="number" tick={axisStyle} tickLine={false} axisLine={false} allowDecimals={false} />
-                <YAxis type="category" dataKey="title" width={140} tick={{ ...axisStyle, fill: T.cream }} tickLine={false} axisLine={false} />
-                <Tooltip {...tipStyle} />
-                <Bar dataKey="joins" name="Joins" fill={CHART.cat[2]} radius={[0, 4, 4, 0]} barSize={14} />
-              </BarChart>
-            </ResponsiveContainer>
+          {activeRooms.length ? (
+            <ChartBox>
+              <Bar
+                data={{
+                  labels: activeRooms.map(r => r.title),
+                  datasets: [{
+                    label: 'Joins',
+                    data: activeRooms.map(r => r.joins),
+                    backgroundColor: `${CHART.cat[2]}CC`,
+                    hoverBackgroundColor: CHART.cat[2],
+                    borderRadius: 7,
+                    borderSkipped: false,
+                    maxBarThickness: 16,
+                  }],
+                }}
+                options={{
+                  ...baseOptions,
+                  indexAxis: 'y',
+                  interaction: { mode: 'nearest', intersect: false },
+                  scales: {
+                    x: { grid: yGrid, border: { display: false }, ticks: { precision: 0 } },
+                    y: { grid: noGrid, border: { display: false }, ticks: { color: T.cream, callback(v) {
+                      const label = this.getLabelForValue(v);
+                      return label.length > 22 ? label.slice(0, 21) + '…' : label;
+                    } } },
+                  },
+                }}
+              />
+            </ChartBox>
           ) : <EmptyState title="No room joins yet" hint="Counts appear once members join rooms." />}
         </Card>
 
         <Card>
           <ChartTitle>Revenue by month (£)</ChartTitle>
-          {revenueRows.length ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={revenueRows} margin={{ top: 6, right: 10, bottom: 0, left: -14 }}>
-                <CartesianGrid stroke={CHART.grid} vertical={false} />
-                <XAxis dataKey="month" tick={axisStyle} tickLine={false} axisLine={{ stroke: T.line }} />
-                <YAxis tick={axisStyle} tickLine={false} axisLine={false} />
-                <Tooltip {...tipStyle} formatter={(v, n) => ['£' + Number(v).toFixed(2), n]} />
-                <Legend wrapperStyle={{ fontSize: 11, fontFamily: fontBody }} />
-                <Bar dataKey="paid" name="Collected" fill={CHART.single} stroke={T.card} strokeWidth={2} radius={[3, 3, 0, 0]} />
-                <Bar dataKey="pending" name="Awaiting" fill={CHART.neutral} stroke={T.card} strokeWidth={2} radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          {revenue.length ? (
+            <ChartBox>
+              <Bar
+                data={{
+                  labels: revenue.map(r => month(r.month)),
+                  datasets: [
+                    {
+                      label: 'Collected',
+                      data: revenue.map(r => r.paid_pence / 100),
+                      backgroundColor: goldFill(0.9, 0.45),
+                      hoverBackgroundColor: CHART.single,
+                      borderRadius: 7,
+                      borderSkipped: false,
+                      maxBarThickness: 30,
+                    },
+                    {
+                      label: 'Awaiting',
+                      data: revenue.map(r => r.pending_pence / 100),
+                      backgroundColor: `${CHART.neutral}99`,
+                      hoverBackgroundColor: CHART.neutral,
+                      borderRadius: 7,
+                      borderSkipped: false,
+                      maxBarThickness: 30,
+                    },
+                  ],
+                }}
+                options={{
+                  ...baseOptions,
+                  plugins: {
+                    ...baseOptions.plugins,
+                    legend: {
+                      display: true, position: 'bottom',
+                      labels: { usePointStyle: true, pointStyle: 'circle', boxWidth: 7, boxHeight: 7, padding: 14 },
+                    },
+                    tooltip: { ...tooltip, callbacks: { label: c => ` ${c.dataset.label}: £${Number(c.parsed.y).toFixed(2)}` } },
+                  },
+                  scales: {
+                    x: { grid: noGrid, border: { color: T.line } },
+                    y: { grid: yGrid, border: { display: false }, ticks: { callback: v => '£' + v } },
+                  },
+                }}
+              />
+            </ChartBox>
           ) : <EmptyState title="No payments yet" hint="Create the first one on the Payments screen." />}
         </Card>
       </div>

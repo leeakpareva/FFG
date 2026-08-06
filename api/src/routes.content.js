@@ -40,6 +40,21 @@ contentRouter.get('/events', requireMember, async (req, res) => {
   });
 });
 
+/**
+ * Who's going, for the event page: real attendees, oldest seat first, capped.
+ * Members can see each other by design — this is a members-only club page.
+ */
+contentRouter.get('/events/:id/attendees', requireMember, async (req, res) => {
+  const { rows } = await q(`
+    SELECT m.id, m.name, a.rsvp_at
+      FROM event_attendees a JOIN members m ON m.id = a.member_id
+     WHERE a.event_id = $1
+     ORDER BY a.rsvp_at ASC
+     LIMIT 24`, [req.params.id]);
+  const count = await q('SELECT count(*)::int AS n FROM event_attendees WHERE event_id = $1', [req.params.id]);
+  res.json({ attendees: rows, count: count.rows[0].n });
+});
+
 /** Free events: attending is one tap. Paid events must go through checkout. */
 contentRouter.post('/events/:id/attend', requireMember, async (req, res) => {
   const { rows } = await q('SELECT id, price_pence FROM events WHERE id = $1', [req.params.id]);

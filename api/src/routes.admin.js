@@ -43,6 +43,7 @@ const SCOPE_RULES = [
   ['/site-content', 'website'],
   ['/marketing', 'marketing'],
   ['/applications', 'applications'],
+  ['/reviewers', 'applications'],
   ['/media', null],
 ];
 adminRouter.use((req, res, next) => {
@@ -877,20 +878,92 @@ adminRouter.delete('/rooms/:id', async (req, res) => {
  */
 
 adminRouter.get('/applications', async (req, res) => {
-  const status = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
+  const status = ['pending', 'shortlisted', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
   const { rows } = await q(`
     SELECT a.*, m.name AS referred_by_name
       FROM applications a
       LEFT JOIN members m ON m.id = a.referral
      ${status ? 'WHERE a.status = $1' : ''}
-     ORDER BY (a.status = 'pending') DESC, a.created_at DESC
+     ORDER BY (a.status IN ('pending', 'shortlisted')) DESC, a.created_at DESC
      LIMIT 500`, status ? [status] : []);
   res.json({ applications: rows });
 });
 
+/** Who can review — the team plus the house admin. For the assign dropdown. */
+adminRouter.get('/reviewers', async (_req, res) => {
+  let team = [];
+  try {
+    ({ rows: team } = await q(
+      'SELECT username, display_name FROM admin_users WHERE NOT disabled ORDER BY display_name'));
+  } catch { /* un-migrated box */ }
+  res.json({ reviewers: team.map(t => ({ username: t.username, name: t.display_name })) });
+});
+
+/** Shortlist: a holding stage between pending and a decision. No email. */
+adminRouter.post('/applications/:id/shortlist', async (req, res) => {
+  const { rows } = await q(
+    `UPDATE applications SET status = 'shortlisted'
+      WHERE id = $1 AND status = 'pending' RETURNING id`, [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'no pending application with that id' });
+  res.json({ ok: true });
+});
+
+/** Back to the queue from the shortlist. */
+adminRouter.post('/applications/:id/unshortlist', async (req, res) => {
+  const { rows } = await q(
+    `UPDATE applications SET status = 'pending'
+      WHERE id = $1 AND status = 'shortlisted' RETURNING id`, [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'no shortlisted application with that id' });
+  res.json({ ok: true });
+});
+
+adminRouter.patch('/applications/:id', async (req, res) => {
+  if (!('assigned_to' in (req.body || {}))) return res.status(400).json({ error: 'nothing to change' });
+  const assignee = req.body.assigned_to ? String(req.body.assigned_to).slice(0, 60) : null;
+  const { rows } = await q(
+    `UPDATE applications SET assigned_to = $2 WHERE id = $1 RETURNING id`,
+    [req.params.id, assignee]);
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
+/** Reviewer notes: an append-only trail of {by, at, text}. */
+adminRouter.post('/applications/:id/notes', async (req, res) => {
+  const text = String(req.body?.text || '').trim().slice(0, 2000);
+  if (!text) return res.status(400).json({ error: 'text is required' });
+  const note = { by: req.admin.name, at: new Date().toISOString(), text };
+  const { rows } = await q(
+    `UPDATE applications SET notes = coalesce(notes, '[]'::jsonb) || $2::jsonb
+      WHERE id = $1 RETURNING notes`,
+    [req.params.id, JSON.stringify(note)]);
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  res.json({ notes: rows[0].notes });
+});
+
+/**
+ * The application funnel, for Marketing: how many started the form, finished
+ * part one, finished part two — last 30 days, from the site's anonymous
+ * beacons plus the applications table itself.
+ */
+adminRouter.get('/marketing/funnel', async (_req, res) => {
+  let beacons = { apply_started: 0, apply_part1_done: 0, apply_part2_done: 0 };
+  try {
+    const { rows } = await q(`
+      SELECT step, count(*)::int AS n FROM site_events
+       WHERE created_at > now() - interval '30 days' GROUP BY step`);
+    for (const r of rows) beacons[r.step] = r.n;
+  } catch { /* un-migrated box */ }
+  const apps = await q(`
+    SELECT count(*)::int                                                   AS part1,
+           count(*) FILTER (WHERE status <> 'awaiting_details')::int       AS part2,
+           count(*) FILTER (WHERE status = 'approved')::int                AS approved
+      FROM applications WHERE created_at > now() - interval '30 days'`);
+  res.json({ days: 30, beacons, applications: apps.rows[0] });
+});
+
 adminRouter.post('/applications/:id/approve', async (req, res) => {
   const { rows } = await q(
-    `SELECT * FROM applications WHERE id = $1 AND status = 'pending'`, [req.params.id]
+    `SELECT * FROM applications WHERE id = $1 AND status IN ('pending', 'shortlisted')`, [req.params.id]
   );
   const app = rows[0];
   if (!app) {
@@ -970,7 +1043,7 @@ adminRouter.post('/applications/:id/approve', async (req, res) => {
 adminRouter.post('/applications/:id/reject', async (req, res) => {
   const { rows } = await q(
     `UPDATE applications SET status = 'rejected', decided_by = $2, decided_at = now()
-      WHERE id = $1 AND status = 'pending' RETURNING name, email`,
+      WHERE id = $1 AND status IN ('pending', 'shortlisted') RETURNING name, email`,
     [req.params.id, req.admin?.username || 'admin']
   );
   const app = rows[0];

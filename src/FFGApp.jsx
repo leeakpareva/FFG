@@ -200,7 +200,7 @@ const hydrateContent = ({ articles, events, replays, workshops }) => {
     id: e.id, name: e.name, where: e.venue, date: e.day, month: e.month,
     time: e.time_label || "", tag: e.tag, spots: e.spots || "Open",
     host: e.host_id, image: null, image_url: e.image_url, about: e.about || "",
-    price_pence: e.price_pence || null,
+    price_pence: e.price_pence || null, starts_at: e.starts_at || null,
     attending: !!e.attending, payment_pending: !!e.payment_pending,
   })));
   REPLAYS.length = 0;
@@ -3243,6 +3243,114 @@ const shapeFeedPost = (p, myId) => ({
   likes: p.likes, liked: p.liked, saved: p.saved, comments: 0, stat: p.stat, tags: p.tags || [],
 });
 
+/* ------------------------------------------------------------- web push */
+
+const b64ToUint8 = (b64) => {
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+};
+
+const pushSupported = () =>
+  "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+/** Ask, register the worker, subscribe, and hand the subscription to the API. */
+async function enablePush(getToken) {
+  if (!pushSupported()) {
+    throw new Error("On iPhone, add Connect to your Home Screen first (Share → Add to Home Screen), then try again from there.");
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("Notifications were not allowed.");
+  const reg = await navigator.serviceWorker.register("/sw.js");
+  const { key } = await createApi(getToken).pushKey();
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: b64ToUint8(key),
+  });
+  await createApi(getToken).pushSubscribe(sub.toJSON());
+  localStorage.setItem("ffg.push.on", "1");
+}
+
+/**
+ * The first-week card: three things that make membership feel alive, each
+ * ticking itself off from real state. Dismissible; gone for good once all
+ * three are done.
+ */
+const GettingStarted = ({ member, posts, getToken }) => {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem("ffg.checklist.done") === "1");
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushOn, setPushOn] = useState(() =>
+    localStorage.getItem("ffg.push.on") === "1" ||
+    (typeof Notification !== "undefined" && Notification.permission === "granted"));
+
+  const items = [
+    {
+      id: "push", done: pushOn, label: "Turn on notifications",
+      sub: "Hear about messages and event reminders",
+      action: async () => {
+        if (pushBusy || pushOn) return;
+        setPushBusy(true);
+        try { await enablePush(getToken); setPushOn(true); }
+        catch (e) { window.alert(e.message); }
+        finally { setPushBusy(false); }
+      },
+    },
+    {
+      id: "rsvp", done: EVENTS.some(e => e.attending), label: "Reserve a seat at an event",
+      sub: "The Events tab has what's coming up",
+    },
+    {
+      id: "post", done: (posts || []).some(p => p.me), label: "Say hello in the feed",
+      sub: "Introduce yourself to the community",
+    },
+  ];
+  const remaining = items.filter(i => !i.done).length;
+  if (dismissed || remaining === 0) return null;
+
+  return (
+    <div style={{
+      margin: "12px 18px 0", background: T.card, border: `1px solid ${T.gold}55`,
+      borderRadius: 18, padding: "14px 16px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 14.5, color: T.cream }}>
+          Getting started
+        </span>
+        <span onClick={() => { localStorage.setItem("ffg.checklist.done", "1"); setDismissed(true); }}
+              style={{ fontSize: 12, color: T.dim, cursor: "pointer", fontFamily: "'Inter',sans-serif" }}>
+          Dismiss
+        </span>
+      </div>
+      {items.map(item => (
+        <div key={item.id} onClick={item.action} style={{
+          display: "flex", alignItems: "center", gap: 11, padding: "8px 0",
+          cursor: item.action && !item.done ? "pointer" : "default",
+          opacity: item.done ? 0.55 : 1,
+        }}>
+          <div style={{
+            width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+            border: `1.5px solid ${item.done ? T.community : T.line}`,
+            background: item.done ? `${T.community}18` : "transparent",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            {item.done && <Check size={13} color={T.community} />}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: 13.5, fontWeight: 600, color: T.cream, fontFamily: "'Inter',sans-serif",
+              textDecoration: item.done ? "line-through" : "none",
+            }}>
+              {item.id === "push" && pushBusy ? "Turning on…" : item.label}
+            </div>
+            <div style={{ fontSize: 11.5, color: T.dim, fontFamily: "'Inter',sans-serif", marginTop: 1 }}>{item.sub}</div>
+          </div>
+          {item.action && !item.done && <ChevronRight size={15} color={T.gold} />}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const Feed = ({ openUser, openConcierge, openRoom, member }) => {
   const { getToken } = useAuth();
   const [posts, setPosts] = useState(null); // null = loading
@@ -3277,6 +3385,7 @@ const Feed = ({ openUser, openConcierge, openRoom, member }) => {
         {greet}{member?.name ? `, ${member.name.split(" ")[0]}` : ""}.
       </div>
       <AIBriefing openConcierge={openConcierge} member={member} />
+      <GettingStarted member={member} posts={posts} getToken={getToken} />
 
       {/* composer bar */}
       <div onClick={() => setComposing(true)} style={{
@@ -3428,9 +3537,44 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
   const [confirming, setConfirming] = useState(false);
   const [showTicket, setShowTicket] = useState(false);
   const [payBusy, setPayBusy] = useState(false);
+  const [going, setGoing] = useState(null); // { attendees, count } — the real list
   const host = USERS[event.host] || null;
   const priced = !!event.price_pence;
   const priceLabel = priced ? `£${(event.price_pence / 100).toFixed(event.price_pence % 100 ? 2 : 0)}` : null;
+
+  /* The real guest list, refreshed after an RSVP so your own avatar appears. */
+  useEffect(() => {
+    let on = true;
+    createApi(getToken).eventAttendees(event.id)
+      .then(d => { if (on) setGoing(d); })
+      .catch(() => {});
+    return () => { on = false; };
+  }, [event.id, rsvp]);
+
+  /* One tap into the phone's calendar. Times come from starts_at; an hour is
+     assumed when the event carries no end. */
+  const addToCalendar = () => {
+    const start = new Date(event.starts_at);
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    const stamp = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    const esc = (s) => String(s || "").replace(/([,;])/g, "\\$1").replace(/\n/g, "\\n");
+    const ics = [
+      "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//FFG Connect//EN", "BEGIN:VEVENT",
+      `UID:${event.id}@connect.ffg`, `DTSTAMP:${stamp(new Date())}`,
+      `DTSTART:${stamp(start)}`, `DTEND:${stamp(end)}`,
+      `SUMMARY:${esc(event.name)}`, `LOCATION:${esc(event.where)}`,
+      `DESCRIPTION:${esc("Your seat is confirmed. Ticket in the FFG Connect app.")}`,
+      "END:VEVENT", "END:VCALENDAR",
+    ].join("\r\n");
+    const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${event.name.replace(/[^\w ]+/g, "").trim() || "event"}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  };
 
   /* Free events confirm in place; paid events hand over to Stripe and the
      seat is granted by the webhook the moment payment lands. */
@@ -3535,20 +3679,27 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
         </div>
         )}
 
-        {/* who's going */}
+        {/* who's going — the real guest list */}
         <div style={{ padding: "0 18px 18px" }}>
-          <div style={{ fontSize: 11, letterSpacing: "0.14em", color: T.gold, fontWeight: 600, fontFamily: "'Inter',sans-serif", marginBottom: 10 }}>WHO'S GOING</div>
-          {event.going?.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center" }}>
-            {event.going.map((uid, i) => (
-              <div key={uid} onClick={() => openUser(uid)} style={{ marginLeft: i === 0 ? 0 : -10, cursor: "pointer" }}>
-                <Avatar initials={uid} size={40} ring={T.ink} />
-              </div>
-            ))}
-            <span style={{ marginLeft: 12, fontSize: 12.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
-              {event.going.map(u => USERS[u]?.name?.split(" ")[0] || u).slice(0, 2).join(", ")} and {event.going.length - 2 > 0 ? `${event.going.length - 2} others` : "others"} are going
-            </span>
+          <div style={{ fontSize: 11, letterSpacing: "0.14em", color: T.gold, fontWeight: 600, fontFamily: "'Inter',sans-serif", marginBottom: 10 }}>
+            WHO'S GOING{going?.count ? ` · ${going.count}` : ""}
           </div>
+          {going?.attendees?.length > 0 ? (
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", rowGap: 8 }}>
+              {going.attendees.slice(0, 8).map((a, i) => (
+                <div key={a.id} onClick={() => openUser(a.id)} style={{ marginLeft: i === 0 ? 0 : -10, cursor: "pointer" }}>
+                  <Avatar initials={a.id} size={40} ring={T.ink} />
+                </div>
+              ))}
+              <span style={{ marginLeft: 12, fontSize: 12.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+                {going.attendees.slice(0, 2).map(a => (a.name || "").split(" ")[0]).filter(Boolean).join(", ")}
+                {going.count > 2 ? ` and ${going.count - 2} other${going.count - 2 === 1 ? "" : "s"} are going` : going.count > 0 ? (going.count === 1 ? " is going" : " are going") : ""}
+              </span>
+            </div>
+          ) : (
+            <span style={{ fontSize: 12.5, color: T.dim, fontFamily: "'Inter',sans-serif" }}>
+              Be the first to reserve a seat.
+            </span>
           )}
         </div>
         <div style={{ height: 110 }} />
@@ -3573,6 +3724,16 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
               ? (payBusy ? "Taking you to payment…" : event.payment_pending ? `Complete payment — ${priceLabel}` : `Pay ${priceLabel} — reserve my seat`)
               : "RSVP — Reserve my seat"}
         </button>
+        {rsvp && event.starts_at && (
+          <button onClick={addToCalendar} style={{
+            width: "100%", marginTop: 8, padding: "10px 0", borderRadius: 999, cursor: "pointer",
+            border: "none", background: "transparent", color: T.dim,
+            fontFamily: "'Inter',sans-serif", fontWeight: 600, fontSize: 13,
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
+          }}>
+            <Calendar size={14} />Add to my calendar
+          </button>
+        )}
       </div>
 
       {/* RSVP confirmation sheet */}

@@ -13,6 +13,7 @@ import { adminRouter } from './routes.admin.js';
 import { publicRouter } from './routes.public.js';
 import { stripeWebhookRouter } from './stripe.js';
 import { setupWs } from './ws.js';
+import { pushRouter, startEventReminders } from './push.js';
 import { catchAsync } from './catchAsync.js';
 
 const app = express();
@@ -89,6 +90,7 @@ app.use('/api', catchAsync(publicRouter));
 // Who am I, and my own profile: GET to read, PATCH to edit.
 app.use('/api/me', catchAsync(profileRouter));
 
+app.use('/api/push', catchAsync(pushRouter));
 app.use('/api/media', catchAsync(mediaRouter));
 app.use('/api/articles', catchAsync(articlesRouter));
 app.use('/api/rooms', catchAsync(roomsRouter));
@@ -122,3 +124,6 @@ const server = app.listen(port, '0.0.0.0', () => console.log(`[api] listening on
 
 // Real-time doorbell: /ws, same Clerk auth as REST.
 setupWs(server);
+
+// T-24h event reminders (email + push), every 15 minutes, exactly-once per seat.
+startEventReminders();
