@@ -1446,8 +1446,8 @@ const ArticleReader = ({ article, onBack, openUser }) => {
         <Share2 size={19} color={T.cream} style={{ cursor: "pointer" }} onClick={shareArticle} />
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {article.image && (
-          <img src={article.image_url || EVENT_PICS[article.image]} alt="" style={{ width: "100%", display: "block" }} />
+        {(article.image_url || article.image) && (
+          <CoverImg src={article.image_url} stock={article.image} style={{ width: "100%", display: "block" }} />
         )}
         <div style={{ padding: "20px 20px 8px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
@@ -1662,7 +1662,7 @@ const ReplayViewer = ({ replay, onBack, openUser }) => {
           </div>
         ) : (
         <div style={{ position: "relative", background: "#000" }}>
-          <img src={replay.image_url || EVENT_PICS[replay.image]} alt="" style={{ width: "100%", display: "block", opacity: playing ? 0.55 : 0.85 }} />
+          <CoverImg src={replay.image_url} stock={replay.image} style={{ width: "100%", display: "block", opacity: playing ? 0.55 : 0.85 }} />
           <div onClick={() => setPlaying(p => !p)} style={{ position: "absolute", inset: 0, cursor: "pointer" }}>
             {!playing && <PlayBadge size={62} />}
           </div>
@@ -1757,7 +1757,7 @@ const WatchTab = ({ openReplay, version }) => {
         <Widget label="CONTINUE WATCHING" action="Clear" onAction={() => { writeJSON("ffg.watched", {}); setWatched({}); }}>
           <div onClick={() => openReplay(resume)} style={{ display: "flex", gap: 12, cursor: "pointer", alignItems: "center" }}>
             <div style={{ position: "relative", width: 96, height: 62, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
-              <img src={resume.image_url || EVENT_PICS[resume.image]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <CoverImg src={resume.image_url} stock={resume.image} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               <PlayBadge size={26} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1775,7 +1775,7 @@ const WatchTab = ({ openReplay, version }) => {
         border: `1px solid ${T.line}`, background: T.card,
       }}>
         <div style={{ position: "relative" }}>
-          <img src={featured.image_url || EVENT_PICS[featured.image]} alt="" style={{ width: "100%", display: "block" }} />
+          <CoverImg src={featured.image_url} stock={featured.image} style={{ width: "100%", display: "block" }} />
           <PlayBadge />
           <DurationChip icon={Clock}>{featured.duration}</DurationChip>
         </div>
@@ -1797,7 +1797,7 @@ const WatchTab = ({ openReplay, version }) => {
             overflow: "hidden", cursor: "pointer",
           }}>
             <div style={{ position: "relative" }}>
-              <img src={r.image_url || EVENT_PICS[r.image]} alt="" style={{ width: "100%", height: 96, objectFit: "cover", display: "block" }} />
+              <CoverImg src={r.image_url} stock={r.image} style={{ width: "100%", height: 96, objectFit: "cover", display: "block" }} />
               <PlayBadge size={34} />
               <DurationChip>{r.duration}</DurationChip>
             </div>
@@ -1872,7 +1872,7 @@ const LearnTab = ({ openUser }) => {
             <div key={w.id} style={{ background: T.card, border: `1px solid ${isOn ? `${T.gold}66` : T.line}`, borderRadius: 20, overflow: "hidden" }}>
               <div style={{ display: "flex", gap: 13, padding: 13 }}>
                 <div style={{ width: 74, height: 74, borderRadius: 14, overflow: "hidden", flexShrink: 0 }}>
-                  <img src={w.image_url || EVENT_PICS[w.image]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <CoverImg src={w.image_url} stock={w.image} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 6 }}>
@@ -1964,7 +1964,7 @@ const ReadTab = ({ openArticle }) => {
         borderRadius: 20, overflow: "hidden", cursor: "pointer", marginBottom: 12,
         border: `1px solid ${T.line}`, background: T.card,
       }}>
-        <img src={ARTICLES[0].image_url || EVENT_PICS[ARTICLES[0].image]} alt="" style={{ width: "100%", display: "block" }} />
+        <CoverImg src={ARTICLES[0].image_url} stock={ARTICLES[0].image} style={{ width: "100%", display: "block" }} />
         <div style={{ padding: "15px 16px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <PillarTag name={ARTICLES[0].tag} />
@@ -1985,7 +1985,7 @@ const ReadTab = ({ openArticle }) => {
               borderRadius: 16, padding: 13, cursor: "pointer", alignItems: "center",
             }}>
               <div style={{ width: 86, height: 86, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
-                <img src={a.image_url || EVENT_PICS[a.image]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <CoverImg src={a.image_url} stock={a.image} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14, lineHeight: 1.35, color: T.cream, marginBottom: 5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{a.title}</div>
@@ -3317,6 +3317,30 @@ const shapeFeedPost = (p, myId) => ({
 });
 
 /**
+ * A content cover image that can never show the browser's broken-image
+ * glyph: uploaded art resolves to an absolute /media URL (it must — on the
+ * Vercel origin a relative one 404s), stock art comes from EVENT_PICS, and
+ * with neither the slot renders as a quiet branded card instead.
+ */
+const CoverImg = ({ src, stock, style }) => {
+  const [failed, setFailed] = useState(false);
+  const resolved = !failed && (src ? mediaUrl(src) : (EVENT_PICS[stock] || null));
+  if (!resolved) {
+    return (
+      <div style={{
+        ...style,
+        background: `linear-gradient(140deg, ${T.gold}2E, ${T.card} 70%)`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        minHeight: style?.height || 86,
+      }}>
+        <img src={T.logo} alt="" style={{ width: 30, height: 30, objectFit: "contain", opacity: 0.45 }} />
+      </div>
+    );
+  }
+  return <img src={resolved} alt="" onError={() => setFailed(true)} style={style} />;
+};
+
+/**
  * Grab a still from a local video file — the automatic cover photo. Seeks a
  * beat in so the frame is not a black fade-up. Resolves null when the
  * browser will not play the codec; the post simply goes cover-less.
@@ -3723,7 +3747,7 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
         {/* hero */}
         {event.image && (
           <div style={{ margin: "18px 18px 0", borderRadius: 20, overflow: "hidden", border: `1px solid ${T.line}` }}>
-            <img src={event.image_url || EVENT_PICS[event.image]} alt="" style={{ width: "100%", display: "block" }} />
+            <CoverImg src={event.image_url} stock={event.image} style={{ width: "100%", display: "block" }} />
           </div>
         )}
         <div style={{
