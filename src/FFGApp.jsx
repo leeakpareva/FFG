@@ -526,6 +526,11 @@ const ProfileTile = ({ tile }) => {
  * become quiet text tiles, so nothing a member shares disappears.
  */
 const PostGrid = ({ posts, emptyTitle, emptyHint, onOpen }) => {
+  /* Square = classic grid crop; Full = every photo whole, letterboxed.
+     A display choice, remembered — the stored image is never touched. */
+  const [fit, setFit] = useState(() => readFlag("ffg.grid.fit") || "cover");
+  const toggleFit = (next) => { setFit(next); writeFlag("ffg.grid.fit", next); };
+
   if (!posts) return <div style={{ padding: "34px 18px", textAlign: "center", fontSize: 13, color: T.dim, fontFamily: "'Inter',sans-serif" }}>Loading…</div>;
   if (!posts.length) {
     return (
@@ -536,38 +541,50 @@ const PostGrid = ({ posts, emptyTitle, emptyHint, onOpen }) => {
       </div>
     );
   }
+  const media = { width: "100%", height: "100%", objectFit: fit, background: fit === "contain" ? "#000" : undefined };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, padding: 2 }}>
-      {posts.map(p => (
-        <div key={p.id} onClick={() => onOpen(p)} style={{
-          position: "relative", aspectRatio: "1", cursor: "pointer", overflow: "hidden",
-          background: T.card, border: `1px solid ${T.line}`,
-        }}>
-          {p.image_url ? (
-            isVideoUrl(p.image_url) ? (
-              <>
-                <video src={mediaUrl(p.image_url)} muted playsInline preload="metadata"
-                  poster={p.poster_url ? mediaUrl(p.poster_url) : undefined}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                <div style={{
-                  position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 11,
-                  background: "#000000AA", display: "flex", alignItems: "center", justifyContent: "center",
-                }}><Play size={11} color="#FFF" fill="#FFF" /></div>
-              </>
+    <>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "8px 10px 2px" }}>
+        {[["cover", "Square"], ["contain", "Full"]].map(([mode, label]) => (
+          <button key={mode} onClick={() => toggleFit(mode)} style={{
+            border: `1px solid ${fit === mode ? T.gold : T.line}`, cursor: "pointer",
+            background: fit === mode ? `${T.gold}14` : "transparent", borderRadius: 999,
+            padding: "5px 12px", fontFamily: "'Inter',sans-serif", fontWeight: 700,
+            fontSize: 11, color: fit === mode ? T.goldSoft : T.dim,
+          }}>{label}</button>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, padding: 2 }}>
+        {posts.map(p => (
+          <div key={p.id} onClick={() => onOpen(p)} style={{
+            position: "relative", aspectRatio: "1", cursor: "pointer", overflow: "hidden",
+            background: T.card, border: `1px solid ${T.line}`,
+          }}>
+            {p.image_url ? (
+              isVideoUrl(p.image_url) ? (
+                <>
+                  <video src={mediaUrl(p.image_url)} muted playsInline preload="metadata"
+                    poster={p.poster_url ? mediaUrl(p.poster_url) : undefined}
+                    style={media} />
+                  <div style={{
+                    position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 11,
+                    background: "#000000AA", display: "flex", alignItems: "center", justifyContent: "center",
+                  }}><Play size={11} color="#FFF" fill="#FFF" /></div>
+                </>
+              ) : (
+                <img src={mediaUrl(p.image_url)} alt="" loading="lazy" style={media} />
+              )
             ) : (
-              <img src={mediaUrl(p.image_url)} alt="" loading="lazy"
-                style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-            )
-          ) : (
-            <div style={{
-              width: "100%", height: "100%", padding: 8, boxSizing: "border-box",
-              fontSize: 10.5, lineHeight: 1.45, color: T.dim, fontFamily: "'Inter',sans-serif",
-              overflow: "hidden",
-            }}>{p.text}</div>
-          )}
-        </div>
-      ))}
-    </div>
+              <div style={{
+                width: "100%", height: "100%", padding: 8, boxSizing: "border-box",
+                fontSize: 10.5, lineHeight: 1.45, color: T.dim, fontFamily: "'Inter',sans-serif",
+                overflow: "hidden",
+              }}>{p.text}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
   );
 };
 
@@ -603,7 +620,12 @@ const PostViewer = ({ post, member, openUser, onClose, canDelete, onDeleted }) =
             ? <video src={mediaUrl(post.image_url)} controls playsInline autoPlay muted
                 poster={post.poster_url ? mediaUrl(post.poster_url) : undefined}
                 style={{ width: "100%", maxHeight: "60vh", background: "#000", display: "block" }} />
-            : <img src={mediaUrl(post.image_url)} alt="" style={{ width: "100%", display: "block" }} />
+            /* contain within the viewport: the whole photo is visible at
+               once, whatever its aspect ratio — never cropped. */
+            : <img src={mediaUrl(post.image_url)} alt="" style={{
+                width: "100%", maxHeight: "72vh", objectFit: "contain",
+                background: "#000", display: "block",
+              }} />
         )}
         <div style={{ padding: "16px 18px" }}>
           <p style={{ margin: "0 0 10px", fontSize: 14.5, lineHeight: 1.55, color: T.cream, fontFamily: "'Inter',sans-serif" }}>{post.text}</p>
@@ -2975,15 +2997,17 @@ const Composer = ({ member, onPost, onClose }) => {
 
         {preview ? (
           <div style={{ position: "relative", marginBottom: 12 }}>
+            {/* contain, never cover: the preview shows the WHOLE image or
+                video exactly as it will post — nothing looks cut off. */}
             {isVid ? (
               <video src={preview} muted playsInline controls={!busy} style={{
-                width: "100%", maxHeight: 190, objectFit: "cover",
+                width: "100%", maxHeight: 280, objectFit: "contain", background: "#000",
                 borderRadius: 14, border: `1px solid ${T.line}`,
                 opacity: busy ? 0.55 : 1, transition: "opacity 0.2s",
               }} />
             ) : (
             <img src={preview} alt="" style={{
-              width: "100%", maxHeight: 190, objectFit: "cover",
+              width: "100%", maxHeight: 280, objectFit: "contain", background: "#000",
               borderRadius: 14, border: `1px solid ${T.line}`,
               opacity: busy ? 0.55 : 1, transition: "opacity 0.2s",
             }} />
