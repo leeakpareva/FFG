@@ -56,6 +56,10 @@ export default function Login({ onIn }) {
         <Button type="submit" disabled={busy || !username || !password} style={{ width: '100%' }}>
           {busy ? 'Signing in…' : 'Sign in'}
         </Button>
+        <a href="https://navada-lab.space/" target="_blank" rel="noreferrer" style={{
+          display: 'block', textAlign: 'center', marginTop: 18, fontFamily: fontBody,
+          fontSize: 10, letterSpacing: '0.12em', color: T.dim, textDecoration: 'none',
+        }}>Powered by NAVADA</a>
       </form>
     </div>
   );

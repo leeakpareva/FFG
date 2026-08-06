@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { T, AgentMark, fontHead, fontBody } from './ui.jsx';
-import { getToken, clearToken } from './api.js';
+import { getToken, clearToken, whoAmI } from './api.js';
 import Login from './Login.jsx';
 import Dashboard from './Dashboard.jsx';
 import Members from './Members.jsx';
@@ -13,19 +13,25 @@ import Content from './Content.jsx';
 import Payments from './Payments.jsx';
 import Applications from './Applications.jsx';
 import Website from './Website.jsx';
+import Marketing from './Marketing.jsx';
+import Team from './Team.jsx';
 
+/* scope: which team-account scope opens the screen; null = superadmin only.
+   The API enforces the same map server-side — this only shapes the nav. */
 const SCREENS = [
-  { id: 'dashboard', label: 'Dashboard', C: Dashboard },
-  { id: 'applications', label: 'Applications', C: Applications },
-  { id: 'members', label: 'Members', C: Members },
-  { id: 'content', label: 'Content', C: Content },
-  { id: 'website', label: 'Website', C: Website },
-  { id: 'payments', label: 'Payments', C: Payments },
+  { id: 'dashboard', label: 'Dashboard', C: Dashboard, scope: null },
+  { id: 'applications', label: 'Applications', C: Applications, scope: 'applications' },
+  { id: 'members', label: 'Members', C: Members, scope: null },
+  { id: 'content', label: 'Content', C: Content, scope: null },
+  { id: 'website', label: 'Website', C: Website, scope: 'website' },
+  { id: 'marketing', label: 'Marketing', C: Marketing, scope: 'marketing' },
+  { id: 'payments', label: 'Payments', C: Payments, scope: null },
+  { id: 'team', label: 'Team', C: Team, scope: null },
 ];
 
 export default function AdminApp() {
   const [authed, setAuthed] = useState(() => !!getToken());
-  const [screen, setScreen] = useState('dashboard');
+  const [screen, setScreen] = useState(null);
   const [wide, setWide] = useState(() => window.innerWidth >= 900);
 
   useEffect(() => {
@@ -37,7 +43,11 @@ export default function AdminApp() {
 
   if (!authed) return <Login onIn={() => setAuthed(true)} />;
 
-  const Active = SCREENS.find(s => s.id === screen)?.C || Dashboard;
+  const me = whoAmI();
+  const allowed = (s) => me?.role === 'superadmin' || (s.scope && me?.scopes.includes(s.scope));
+  const visible = SCREENS.filter(allowed);
+  const active = visible.find(s => s.id === screen) || visible[0] || SCREENS[0];
+  const Active = active.C;
 
   const NavButton = ({ s, horizontal }) => (
     <button onClick={() => setScreen(s.id)} style={{
@@ -46,8 +56,8 @@ export default function AdminApp() {
       padding: horizontal ? '9px 6px' : '11px 14px',
       flexDirection: horizontal ? 'column' : 'row',
       flex: horizontal ? 1 : 'none', width: horizontal ? 'auto' : '100%',
-      background: screen === s.id ? `${T.gold}14` : 'transparent',
-      color: screen === s.id ? T.goldSoft : T.dim,
+      background: active.id === s.id ? `${T.gold}14` : 'transparent',
+      color: active.id === s.id ? T.goldSoft : T.dim,
       fontFamily: fontBody, fontWeight: 700, fontSize: horizontal ? 10.5 : 13.5,
     }}>
       {s.label}
@@ -69,12 +79,21 @@ export default function AdminApp() {
               <div style={{ fontSize: 9.5, letterSpacing: '0.22em', color: T.gold, fontWeight: 700, fontFamily: fontBody }}>ADMIN</div>
             </div>
           </div>
-          {SCREENS.map(s => <NavButton key={s.id} s={s} />)}
+          {visible.map(s => <NavButton key={s.id} s={s} />)}
           <div style={{ flex: 1 }} />
-          <button onClick={() => { clearToken(); setScreen('dashboard'); window.location.reload(); }} style={{
+          {me && (
+            <div style={{ padding: '0 14px 10px', fontFamily: fontBody, fontSize: 11.5, color: T.dim }}>
+              Signed in as <span style={{ color: T.cream, fontWeight: 700 }}>{me.name}</span>
+            </div>
+          )}
+          <button onClick={() => { clearToken(); setScreen(null); window.location.reload(); }} style={{
             border: `1px solid ${T.line}`, background: 'transparent', color: T.dim, cursor: 'pointer',
             borderRadius: 12, padding: '10px 14px', fontFamily: fontBody, fontWeight: 600, fontSize: 12.5,
           }}>Sign out</button>
+          <a href="https://navada-lab.space/" target="_blank" rel="noreferrer" style={{
+            display: 'block', textAlign: 'center', marginTop: 10, fontFamily: fontBody,
+            fontSize: 10, letterSpacing: '0.12em', color: T.dim, textDecoration: 'none',
+          }}>Powered by NAVADA</a>
         </div>
       )}
 
@@ -107,7 +126,7 @@ export default function AdminApp() {
             position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex',
             background: T.ink2, borderTop: `1px solid ${T.line}`, padding: '6px 8px calc(6px + env(safe-area-inset-bottom))',
           }}>
-            {SCREENS.map(s => <NavButton key={s.id} s={s} horizontal />)}
+            {visible.map(s => <NavButton key={s.id} s={s} horizontal />)}
           </div>
         )}
       </div>

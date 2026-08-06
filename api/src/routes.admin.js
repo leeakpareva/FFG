@@ -16,7 +16,9 @@ import { mkdir, appendFile, unlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createClerkClient } from '@clerk/backend';
 import { q, pool } from './db.js';
-import { requireSuperAdmin } from './adminAuth.js';
+import bcrypt from 'bcryptjs';
+import sharp from 'sharp';
+import { requireAdmin, requireSuperAdmin, hasScope } from './adminAuth.js';
 import * as storage from './storage.js';
 import { videoStatus, deleteVideo, streamReady } from './stream.js';
 import {
@@ -27,7 +29,31 @@ import { createPayment, stripeReady, stripeTestMode, payId } from './stripe.js';
 import { reindexAll, embedReady } from './embed.js';
 
 export const adminRouter = Router();
-adminRouter.use(requireSuperAdmin);
+adminRouter.use(requireAdmin);
+
+/**
+ * Area access. The superadmin passes everything; a team account needs the
+ * matching scope. Path prefixes not listed here stay superadmin-only, so a
+ * new route is private until it is deliberately opened up.
+ *
+ *   null scope = any signed-in admin (uploads: files are keyed server-side
+ *   and harmless to hold; every scoped area needs them).
+ */
+const SCOPE_RULES = [
+  ['/site-content', 'website'],
+  ['/marketing', 'marketing'],
+  ['/applications', 'applications'],
+  ['/media', null],
+];
+adminRouter.use((req, res, next) => {
+  const rule = SCOPE_RULES.find(([prefix]) => req.path === prefix || req.path.startsWith(prefix + '/'));
+  if (rule) {
+    if (rule[1] === null || hasScope(req, rule[1])) return next();
+    return res.status(403).json({ error: 'not allowed' });
+  }
+  if (req.admin.role !== 'superadmin') return res.status(403).json({ error: 'not allowed' });
+  next();
+});
 
 const PILLARS = ['Capital', 'Community', 'Connect'];
 const clerk = process.env.CLERK_SECRET_KEY
@@ -367,32 +393,82 @@ const MEDIA_EXT = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
   'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
 };
+/* Marketing takes documents and audio on top of images and video. */
+const MARKETING_EXT = {
+  ...MEDIA_EXT,
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/zip': 'zip',
+  'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav',
+};
 
-/** Covers, thumbnails and clips for content. Owned by the house account. */
-adminRouter.post('/media', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'no file' });
-  const sniffed = await fileTypeFromBuffer(req.file.buffer);
-  const ext = sniffed && MEDIA_EXT[sniffed.mime];
-  if (!ext) return res.status(415).json({ error: 'Images (JPEG, PNG, WebP, GIF) or video (MP4, WebM, MOV) only' });
+/* A phone photo straight onto the hero is 8MB the site then ships raw
+   (Next's optimizer is off on the website). Large stills are resized to a
+   web ceiling and their dimensions recorded; GIFs (animation) and video
+   pass through untouched. */
+const IMAGE_MAX_EDGE = 2560;
+/* The API container runs with a 512MB ceiling — keep sharp lean. */
+sharp.cache(false);
+sharp.concurrency(1);
+async function normalizeImage(buffer, mime) {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return { buffer };
+  try {
+    const img = sharp(buffer, { failOn: 'none' }).rotate(); // honour EXIF orientation
+    const meta = await img.metadata();
+    if (!meta.width || !meta.height) return { buffer };
+    if (meta.width <= IMAGE_MAX_EDGE && meta.height <= IMAGE_MAX_EDGE) {
+      return { buffer, width: meta.width, height: meta.height };
+    }
+    const resized = img.resize({ width: IMAGE_MAX_EDGE, height: IMAGE_MAX_EDGE, fit: 'inside', withoutEnlargement: true });
+    const out = mime === 'image/png'
+      ? await resized.png().toBuffer({ resolveWithObject: true })
+      : mime === 'image/webp'
+        ? await resized.webp({ quality: 85 }).toBuffer({ resolveWithObject: true })
+        : await resized.jpeg({ quality: 85, mozjpeg: true }).toBuffer({ resolveWithObject: true });
+    return { buffer: out.data, width: out.info.width, height: out.info.height };
+  } catch (e) {
+    console.error('[media resize] falling back to original:', e.message);
+    return { buffer };
+  }
+}
+
+/** Sniff, normalise, store and record one uploaded file. Returns the media row bits. */
+async function storeAdminFile(file, { kind, allow }) {
+  const sniffed = await fileTypeFromBuffer(file.buffer);
+  const ext = sniffed && allow[sniffed.mime];
+  if (!ext) return { error: 415 };
 
   const owner = await houseMember();
-  if (!owner) return res.status(409).json({ error: 'no house member to own the file' });
+  if (!owner) return { error: 409 };
 
-  const key = storage.makeKey(owner, 'article', ext);
+  const { buffer, width, height } = await normalizeImage(file.buffer, sniffed.mime);
+  const key = storage.makeKey(owner, kind, ext);
   const { rows } = await q(
-    `INSERT INTO media (owner_id, storage_key, kind, mime_type, byte_size, uploaded)
-     VALUES ($1,$2,'article',$3,$4,false) RETURNING id, storage_key`,
-    [owner, key, sniffed.mime, req.file.size]
+    `INSERT INTO media (owner_id, storage_key, kind, mime_type, byte_size, width, height, uploaded)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,false) RETURNING id, storage_key`,
+    [owner, key, kind, sniffed.mime, buffer.length, width || null, height || null]
   );
   try {
-    await storage.put(key, req.file.buffer);
+    await storage.put(key, buffer);
   } catch (e) {
     await q('DELETE FROM media WHERE id = $1', [rows[0].id]);
     console.error('[admin media] write failed', e.message);
-    return res.status(500).json({ error: 'could not store file' });
+    return { error: 500 };
   }
   await q('UPDATE media SET uploaded = true WHERE id = $1', [rows[0].id]);
-  res.status(201).json({ id: rows[0].id, key, url: `/media/${key}` });
+  return { id: rows[0].id, key, mime: sniffed.mime, bytes: buffer.length, width, height };
+}
+
+/** Covers, thumbnails, site photos and clips. Owned by the house account. */
+adminRouter.post('/media', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no file' });
+  const stored = await storeAdminFile(req.file, { kind: 'article', allow: MEDIA_EXT });
+  if (stored.error === 415) return res.status(415).json({ error: 'Images (JPEG, PNG, WebP, GIF) or video (MP4, WebM, MOV) only' });
+  if (stored.error === 409) return res.status(409).json({ error: 'no house member to own the file' });
+  if (stored.error) return res.status(500).json({ error: 'could not store file' });
+  res.status(201).json({ id: stored.id, key: stored.key, url: `/media/${stored.key}` });
 });
 
 /* =============================================================== articles */
@@ -454,8 +530,22 @@ adminRouter.delete('/articles/:id', async (req, res) => {
 /* ================================================================= events */
 
 adminRouter.get('/events', async (_req, res) => {
-  const { rows } = await q('SELECT * FROM events ORDER BY starts_at NULLS LAST, created_at DESC');
+  const { rows } = await q(`
+    SELECT e.*, (SELECT count(*)::int FROM event_attendees a WHERE a.event_id = e.id) AS attendee_count
+      FROM events e ORDER BY e.starts_at NULLS LAST, e.created_at DESC`);
   res.json({ events: rows });
+});
+
+/** Who's coming: every member who RSVP'd or bought a seat, newest first. */
+adminRouter.get('/events/:id/attendees', async (req, res) => {
+  const { rows } = await q(`
+    SELECT m.id, m.name, m.handle, m.email, a.rsvp_at,
+           EXISTS (SELECT 1 FROM payments p
+                    WHERE p.event_id = a.event_id AND p.member_id = a.member_id AND p.status = 'paid') AS paid
+      FROM event_attendees a JOIN members m ON m.id = a.member_id
+     WHERE a.event_id = $1
+     ORDER BY a.rsvp_at DESC`, [req.params.id]);
+  res.json({ attendees: rows });
 });
 
 adminRouter.post('/events', async (req, res) => {
@@ -909,10 +999,14 @@ adminRouter.post('/applications/:id/reject', async (req, res) => {
 /** The website's CMS: every editable slot on forbesfamilygroup's front door. */
 
 adminRouter.get('/site-content', async (_req, res) => {
-  const { rows } = await q('SELECT key, value, updated_at FROM site_content ORDER BY key');
+  const { rows } = await q('SELECT key, value, updated_at, updated_by FROM site_content ORDER BY key');
   const content = {};
-  for (const row of rows) content[row.key] = row.value;
-  res.json({ content });
+  const meta = {};
+  for (const row of rows) {
+    content[row.key] = row.value;
+    meta[row.key] = { updated_at: row.updated_at, updated_by: row.updated_by };
+  }
+  res.json({ content, meta });
 });
 
 adminRouter.put('/site-content/:key', async (req, res) => {
@@ -920,15 +1014,214 @@ adminRouter.put('/site-content/:key', async (req, res) => {
   const { value } = req.body || {};
   if (value === undefined) return res.status(400).json({ error: 'value is required' });
   await q(
-    `INSERT INTO site_content (key, value, updated_at) VALUES ($1, $2, now())
-     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()`,
-    [key, JSON.stringify(value)]
+    `INSERT INTO site_content (key, value, updated_at, updated_by) VALUES ($1, $2, now(), $3)
+     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now(), updated_by = $3`,
+    [key, JSON.stringify(value), req.admin.name]
   );
   res.json({ ok: true });
 });
 
 adminRouter.delete('/site-content/:key', async (req, res) => {
   await q('DELETE FROM site_content WHERE key = $1', [String(req.params.key).slice(0, 60)]);
+  res.status(204).end();
+});
+
+/* =================================================================== team */
+
+/**
+ * Named admin accounts (Ann, Charlene, …). Superadmin-only by the scope
+ * rules above. Passwords arrive plain over TLS and are hashed here; the
+ * response never carries a hash.
+ */
+
+const TEAM_SCOPES = ['website', 'marketing', 'applications'];
+const cleanScopes = (scopes) =>
+  Array.isArray(scopes) ? scopes.filter(s => TEAM_SCOPES.includes(s)) : [];
+
+adminRouter.get('/team', async (_req, res) => {
+  const { rows } = await q(
+    'SELECT username, display_name, scopes, disabled, created_at, last_login_at FROM admin_users ORDER BY created_at');
+  res.json({ team: rows, available_scopes: TEAM_SCOPES });
+});
+
+adminRouter.post('/team', async (req, res) => {
+  const { username, display_name, password, scopes } = req.body || {};
+  const uname = String(username || '').toLowerCase().trim();
+  if (!/^[a-z0-9_.-]{2,40}$/.test(uname)) return res.status(400).json({ error: 'username: 2–40 chars, letters/numbers/._-' });
+  if (!display_name || typeof display_name !== 'string') return res.status(400).json({ error: 'display name is required' });
+  if (typeof password !== 'string' || password.length < 10) return res.status(400).json({ error: 'password must be at least 10 characters' });
+  const hash = await bcrypt.hash(password, 12);
+  try {
+    await q(
+      `INSERT INTO admin_users (username, display_name, password_hash, scopes)
+       VALUES ($1, $2, $3, $4)`,
+      [uname, display_name.trim(), hash, cleanScopes(scopes)]
+    );
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'that username already exists' });
+    throw e;
+  }
+  res.status(201).json({ ok: true, username: uname });
+});
+
+adminRouter.patch('/team/:username', async (req, res) => {
+  const uname = String(req.params.username).toLowerCase();
+  const { display_name, scopes, disabled, password } = req.body || {};
+  const sets = [];
+  const vals = [uname];
+  if (typeof display_name === 'string' && display_name.trim()) {
+    vals.push(display_name.trim()); sets.push(`display_name = $${vals.length}`);
+  }
+  if (scopes !== undefined) {
+    vals.push(cleanScopes(scopes)); sets.push(`scopes = $${vals.length}`);
+  }
+  if (typeof disabled === 'boolean') {
+    vals.push(disabled); sets.push(`disabled = $${vals.length}`);
+  }
+  if (password !== undefined) {
+    if (typeof password !== 'string' || password.length < 10) {
+      return res.status(400).json({ error: 'password must be at least 10 characters' });
+    }
+    vals.push(await bcrypt.hash(password, 12)); sets.push(`password_hash = $${vals.length}`);
+  }
+  if (!sets.length) return res.status(400).json({ error: 'nothing to change' });
+  const { rows } = await q(
+    `UPDATE admin_users SET ${sets.join(', ')} WHERE username = $1 RETURNING username`, vals);
+  if (!rows[0]) return res.status(404).json({ error: 'no such account' });
+  res.json({ ok: true });
+});
+
+adminRouter.delete('/team/:username', async (req, res) => {
+  await q('DELETE FROM admin_users WHERE username = $1', [String(req.params.username).toLowerCase()]);
+  res.status(204).end();
+});
+
+/* ============================================================== marketing */
+
+/**
+ * Campaigns and the asset library. Open to the 'marketing' scope. Assets
+ * ride the same media pipeline as everything else (R2 behind the driver);
+ * the marketing_assets row adds title, tags and the campaign link.
+ */
+
+const utmSlug = (s) => String(s || '').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+
+adminRouter.get('/marketing/campaigns', async (_req, res) => {
+  const { rows } = await q(`
+    SELECT c.*, (SELECT count(*)::int FROM marketing_assets a WHERE a.campaign_id = c.id) AS asset_count
+      FROM campaigns c
+     ORDER BY (c.status = 'archived'), c.created_at DESC`);
+  res.json({ campaigns: rows });
+});
+
+adminRouter.post('/marketing/campaigns', async (req, res) => {
+  const { name, status, objective, audience, channels, start_date, end_date, budget_pence, brief } = req.body || {};
+  if (!name || typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'name is required' });
+  const st = ['draft', 'planned', 'active', 'completed', 'archived'].includes(status) ? status : 'draft';
+  const budget = Number.isInteger(budget_pence) && budget_pence >= 0 ? budget_pence : null;
+  const { rows } = await q(
+    `INSERT INTO campaigns (name, status, objective, audience, channels, start_date, end_date, budget_pence, brief, utm_campaign, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [name.trim(), st, String(objective || ''), String(audience || ''),
+     Array.isArray(channels) ? channels.slice(0, 12).map(String) : [],
+     start_date || null, end_date || null, budget, String(brief || ''),
+     utmSlug(name), req.admin.name]
+  );
+  res.status(201).json(rows[0]);
+});
+
+adminRouter.patch('/marketing/campaigns/:id', async (req, res) => {
+  const allowed = {
+    name: (v) => typeof v === 'string' && v.trim() ? v.trim() : undefined,
+    status: (v) => ['draft', 'planned', 'active', 'completed', 'archived'].includes(v) ? v : undefined,
+    objective: (v) => typeof v === 'string' ? v : undefined,
+    audience: (v) => typeof v === 'string' ? v : undefined,
+    channels: (v) => Array.isArray(v) ? v.slice(0, 12).map(String) : undefined,
+    start_date: (v) => v === null || typeof v === 'string' ? v : undefined,
+    end_date: (v) => v === null || typeof v === 'string' ? v : undefined,
+    budget_pence: (v) => v === null || (Number.isInteger(v) && v >= 0) ? v : undefined,
+    brief: (v) => typeof v === 'string' ? v : undefined,
+    utm_campaign: (v) => typeof v === 'string' ? utmSlug(v) : undefined,
+  };
+  const sets = [];
+  const vals = [req.params.id];
+  for (const [field, clean] of Object.entries(allowed)) {
+    if (!(field in (req.body || {}))) continue;
+    const v = clean(req.body[field]);
+    if (v === undefined) return res.status(400).json({ error: `invalid ${field}` });
+    vals.push(v); sets.push(`${field} = $${vals.length}`);
+  }
+  if (!sets.length) return res.status(400).json({ error: 'nothing to change' });
+  const { rows } = await q(
+    `UPDATE campaigns SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 RETURNING *`, vals);
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  res.json(rows[0]);
+});
+
+adminRouter.delete('/marketing/campaigns/:id', async (req, res) => {
+  await q('DELETE FROM campaigns WHERE id = $1', [req.params.id]);
+  res.status(204).end(); // assets survive: campaign_id falls to NULL
+});
+
+adminRouter.get('/marketing/assets', async (req, res) => {
+  const campaign = req.query.campaign_id || null;
+  const { rows } = await q(`
+    SELECT a.id, a.title, a.tags, a.campaign_id, a.uploaded_by, a.created_at,
+           m.storage_key AS key, m.mime_type, m.byte_size, m.width, m.height
+      FROM marketing_assets a JOIN media m ON m.id = a.media_id
+     WHERE $1::uuid IS NULL OR a.campaign_id = $1
+     ORDER BY a.created_at DESC`, [campaign]);
+  res.json({ assets: rows });
+});
+
+adminRouter.post('/marketing/assets', upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'no file' });
+  const stored = await storeAdminFile(req.file, { kind: 'marketing', allow: MARKETING_EXT });
+  if (stored.error === 415) return res.status(415).json({ error: 'Images, video, audio, PDF, Office documents or ZIP only' });
+  if (stored.error === 409) return res.status(409).json({ error: 'no house member to own the file' });
+  if (stored.error) return res.status(500).json({ error: 'could not store file' });
+
+  const title = String(req.body?.title || req.file.originalname || '').slice(0, 200);
+  const tags = String(req.body?.tags || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean).slice(0, 12);
+  const campaign = req.body?.campaign_id || null;
+  const { rows } = await q(
+    `INSERT INTO marketing_assets (media_id, campaign_id, title, tags, uploaded_by)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING id, title, tags, campaign_id, uploaded_by, created_at`,
+    [stored.id, campaign, title, tags, req.admin.name]
+  );
+  res.status(201).json({
+    ...rows[0], key: stored.key, mime_type: stored.mime, byte_size: stored.bytes,
+    width: stored.width || null, height: stored.height || null,
+  });
+});
+
+adminRouter.patch('/marketing/assets/:id', async (req, res) => {
+  const { title, tags, campaign_id } = req.body || {};
+  const sets = [];
+  const vals = [req.params.id];
+  if (typeof title === 'string') { vals.push(title.slice(0, 200)); sets.push(`title = $${vals.length}`); }
+  if (Array.isArray(tags)) {
+    vals.push(tags.map(s => String(s).trim().toLowerCase()).filter(Boolean).slice(0, 12));
+    sets.push(`tags = $${vals.length}`);
+  }
+  if (campaign_id !== undefined) { vals.push(campaign_id || null); sets.push(`campaign_id = $${vals.length}`); }
+  if (!sets.length) return res.status(400).json({ error: 'nothing to change' });
+  const { rows } = await q(
+    `UPDATE marketing_assets SET ${sets.join(', ')} WHERE id = $1 RETURNING id`, vals);
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
+adminRouter.delete('/marketing/assets/:id', async (req, res) => {
+  const { rows } = await q(
+    `SELECT a.media_id, m.storage_key FROM marketing_assets a JOIN media m ON m.id = a.media_id WHERE a.id = $1`,
+    [req.params.id]);
+  if (rows[0]) {
+    await storage.remove(rows[0].storage_key);
+    await q('DELETE FROM media WHERE id = $1', [rows[0].media_id]); // cascades the asset row
+  }
   res.status(204).end();
 });
 

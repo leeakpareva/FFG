@@ -3399,9 +3399,11 @@ const Events = ({ openEvent }) => (
           <div style={{
             width: 54, height: 60, borderRadius: 14, background: T.ink2, border: `1px solid ${T.line}`,
             display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            overflow: "hidden",
           }}>
-            <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: 21, color: T.gold }}>{e.date}</span>
-            <span style={{ fontSize: 10, letterSpacing: "0.12em", color: T.dim }}>{e.month}</span>
+            <span style={{ fontFamily: "'Archivo',sans-serif", fontWeight: 900, fontSize: String(e.date).length > 2 ? 17 : 21, color: T.gold }}>{e.date}</span>
+            {/* Months arrive as free text ("September") — the tile fits three letters. */}
+            <span style={{ fontSize: 10, letterSpacing: "0.12em", color: T.dim, textTransform: "uppercase" }}>{String(e.month || "").slice(0, 3)}</span>
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 14.5, color: T.cream, marginBottom: 3 }}>{e.name}</div>

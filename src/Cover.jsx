@@ -286,6 +286,26 @@ const Cover = ({ onEnter, T }) => {
           />
         ))}
       </div>
+
+      <a
+        href="https://navada-lab.space/"
+        target="_blank"
+        rel="noreferrer"
+        style={{
+          position: "relative",
+          zIndex: 2,
+          marginTop: "clamp(12px, 2.5vh, 18px)",
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 10,
+          letterSpacing: "0.14em",
+          color: T.dim,
+          textDecoration: "none",
+          opacity: tailIn ? 0.8 : 0,
+          transition: "opacity 1.4s ease 1.1s",
+        }}
+      >
+        Powered by NAVADA
+      </a>
     </div>
   );
 };

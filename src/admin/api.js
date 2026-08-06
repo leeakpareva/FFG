@@ -11,6 +11,31 @@ export const getToken = () => sessionStorage.getItem(KEY);
 export const setToken = (t) => sessionStorage.setItem(KEY, t);
 export const clearToken = () => sessionStorage.removeItem(KEY);
 
+/**
+ * Who is signed in, from the token itself: { username, name, role, scopes }.
+ * The server re-checks every call — this only drives what the UI shows.
+ */
+export function whoAmI() {
+  const t = getToken();
+  if (!t) return null;
+  try {
+    const claims = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return {
+      username: claims.sub || 'admin',
+      name: claims.name || claims.sub || 'Admin',
+      role: claims.role,
+      scopes: claims.role === 'superadmin' ? ['*'] : (claims.scopes || []),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export const can = (scope) => {
+  const me = whoAmI();
+  return !!me && (me.scopes.includes('*') || me.scopes.includes(scope));
+};
+
 class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
@@ -75,12 +100,35 @@ export const api = {
     return call('/api/admin/media', { method: 'POST', form });
   },
 
+  team: () => call('/api/admin/team'),
+  createTeamMember: (body) => call('/api/admin/team', { method: 'POST', body }),
+  updateTeamMember: (username, patch) => call(`/api/admin/team/${username}`, { method: 'PATCH', body: patch }),
+  deleteTeamMember: (username) => call(`/api/admin/team/${username}`, { method: 'DELETE' }),
+
+  campaigns: () => call('/api/admin/marketing/campaigns'),
+  createCampaign: (body) => call('/api/admin/marketing/campaigns', { method: 'POST', body }),
+  updateCampaign: (id, patch) => call(`/api/admin/marketing/campaigns/${id}`, { method: 'PATCH', body: patch }),
+  deleteCampaign: (id) => call(`/api/admin/marketing/campaigns/${id}`, { method: 'DELETE' }),
+
+  marketingAssets: (campaignId) => call(`/api/admin/marketing/assets${campaignId ? `?campaign_id=${campaignId}` : ''}`),
+  uploadMarketingAsset(file, { title, tags, campaign_id } = {}) {
+    const form = new FormData();
+    form.append('file', file);
+    if (title) form.append('title', title);
+    if (tags) form.append('tags', tags);
+    if (campaign_id) form.append('campaign_id', campaign_id);
+    return call('/api/admin/marketing/assets', { method: 'POST', form });
+  },
+  updateMarketingAsset: (id, patch) => call(`/api/admin/marketing/assets/${id}`, { method: 'PATCH', body: patch }),
+  deleteMarketingAsset: (id) => call(`/api/admin/marketing/assets/${id}`, { method: 'DELETE' }),
+
   articles: () => call('/api/admin/articles'),
   createArticle: (body) => call('/api/admin/articles', { method: 'POST', body }),
   setArticleDraft: (id, is_draft) => call(`/api/admin/articles/${id}`, { method: 'PATCH', body: { is_draft } }),
   deleteArticle: (id) => call(`/api/admin/articles/${id}`, { method: 'DELETE' }),
 
   events: () => call('/api/admin/events'),
+  eventAttendees: (id) => call(`/api/admin/events/${id}/attendees`),
   createEvent: (body) => call('/api/admin/events', { method: 'POST', body }),
   deleteEvent: (id) => call(`/api/admin/events/${id}`, { method: 'DELETE' }),
 

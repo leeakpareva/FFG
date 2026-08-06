@@ -11,7 +11,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import {
   T, Card, SectionTitle, Button, Input, TextArea, Select, Field, Sheet,
-  EmptyState, PillarTag, fontBody, fontHead,
+  EmptyState, PillarTag, StatusChip, clip, fontBody, fontHead,
 } from './ui.jsx';
 import { api } from './api.js';
 
@@ -200,6 +200,7 @@ const ArticleSheet = ({ onClose, onDone }) => {
 function Events() {
   const [rows, setRows] = useState(null);
   const [composing, setComposing] = useState(false);
+  const [attendeesOf, setAttendeesOf] = useState(null); // event whose guest list is open
   const load = () => api.events().then(({ events }) => setRows(events)).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
   if (!rows) return <EmptyState title="Loading…" />;
@@ -212,12 +213,15 @@ function Events() {
           <Row key={e.id} first={!i}>
             <div style={{
               width: 46, textAlign: 'center', fontFamily: fontHead, color: T.cream,
-              background: T.ink, borderRadius: 10, padding: '6px 0', border: `1px solid ${T.line}`,
+              background: T.ink, borderRadius: 10, padding: '6px 0', border: `1px solid ${T.line}`, overflow: 'hidden',
             }}>
               <div style={{ fontWeight: 900, fontSize: 17 }}>{e.day}</div>
-              <div style={{ fontSize: 9.5, letterSpacing: '0.1em', color: T.dim }}>{e.month}</div>
+              <div style={{ fontSize: 9.5, letterSpacing: '0.1em', color: T.dim, textTransform: 'uppercase' }}>{String(e.month || '').slice(0, 3)}</div>
             </div>
             <RowTitle title={e.name} sub={`${e.venue}${e.time_label ? ' · ' + e.time_label : ''}${e.price_pence ? ` · £${(e.price_pence / 100).toFixed(2)}` : ' · free'}`} />
+            <Button kind="ghost" style={{ padding: '8px 14px', whiteSpace: 'nowrap' }} onClick={() => setAttendeesOf(e)}>
+              {e.attendee_count ?? 0} attending
+            </Button>
             <PillarTag name={e.tag} />
             <Button kind="ghost" style={{ padding: '8px 14px', color: '#B3261E' }}
                     onClick={() => window.confirm(`Delete "${e.name}"?`) && api.deleteEvent(e.id).then(load)}>
@@ -228,9 +232,41 @@ function Events() {
         {!rows.length && <EmptyState title="No events yet" hint="Events appear on the members' Events tab." />}
       </Card>
       {composing && <EventSheet onClose={() => setComposing(false)} onDone={() => { setComposing(false); load(); }} />}
+      {attendeesOf && <AttendeesSheet event={attendeesOf} onClose={() => setAttendeesOf(null)} />}
     </>
   );
 }
+
+/** The guest list: who has RSVP'd or bought a seat, and when. */
+const AttendeesSheet = ({ event, onClose }) => {
+  const [attendees, setAttendees] = useState(null);
+  useEffect(() => {
+    api.eventAttendees(event.id).then(({ attendees }) => setAttendees(attendees)).catch(() => setAttendees([]));
+  }, [event.id]);
+  return (
+    <Sheet title={`${event.name} — attending`} onClose={onClose}>
+      {!attendees && <EmptyState title="Loading…" />}
+      {attendees && !attendees.length && (
+        <EmptyState title="No one yet" hint="Members who tap RSVP (or buy a seat) appear here the moment they do." />
+      )}
+      {attendees && attendees.map((a, i) => (
+        <div key={a.id} style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px',
+          borderTop: i ? `1px solid ${T.line}` : 'none',
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: fontBody, fontWeight: 700, fontSize: 13.5, color: T.cream }}>{a.name}</div>
+            <div style={{ fontFamily: fontBody, fontSize: 12, color: T.dim, ...clip }}>{a.email || a.handle}</div>
+          </div>
+          {a.paid && <StatusChip status="paid" />}
+          <div style={{ fontFamily: fontBody, fontSize: 11.5, color: T.dim, whiteSpace: 'nowrap' }}>
+            {a.rsvp_at ? new Date(a.rsvp_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''}
+          </div>
+        </div>
+      ))}
+    </Sheet>
+  );
+};
 
 const EventSheet = ({ onClose, onDone }) => {
   const [form, setForm] = useState({
