@@ -3451,8 +3451,16 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
       setPayBusy(false);
     }
   };
-  return (
-    <div style={{ position: "absolute", inset: 0, background: T.ink, zIndex: 30, display: "flex", flexDirection: "column" }}>
+  const shareEvent = () => {
+    const link = `${window.location.origin}/?e=${encodeURIComponent(event.id)}`;
+    const title = `${event.name} — ${event.date} ${event.month}`;
+    if (navigator.share) navigator.share({ title, url: link }).catch(() => {});
+    else navigator.clipboard?.writeText(link);
+  };
+  /* Portaled to <body>: rendered inside the frame this sheet sits UNDER the
+     bottom nav (z40) and the RSVP bar is unreachable — the stacking trap. */
+  return createPortal(
+    <div style={{ position: "fixed", inset: 0, background: T.ink, zIndex: 60, display: "flex", flexDirection: "column" }}>
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "14px 14px 12px", borderBottom: `1px solid ${T.line}`,
@@ -3460,7 +3468,7 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
       }}>
         <ChevronLeft size={24} color={T.cream} style={{ cursor: "pointer" }} onClick={onBack} />
         <span style={{ fontFamily: "'Inter',sans-serif", fontWeight: 700, fontSize: 15, color: T.cream }}>Event</span>
-        <Share2 size={20} color={T.cream} />
+        <Share2 size={20} color={T.cream} style={{ cursor: "pointer" }} onClick={shareEvent} />
       </div>
 
       <div style={{ flex: 1, overflowY: "auto" }}>
@@ -3645,7 +3653,8 @@ const EventDetail = ({ event, onBack, openUser, member }) => {
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -3954,6 +3963,7 @@ export default function FFGApp() {
     const params = new URLSearchParams(window.location.search);
     const wantedUser = params.get("u");
     const wantedArticle = params.get("a");
+    const wantedEvent = params.get("e");
     if (wantedUser && Object.keys(USERS).length) {
       const match = Object.values(USERS).find(u => u.handle === wantedUser || u.id === wantedUser);
       if (match) setViewUser(match.id);
@@ -3962,6 +3972,10 @@ export default function FFGApp() {
     if (wantedArticle && ARTICLES.length) {
       const art = ARTICLES.find(x => x.id === wantedArticle);
       if (art) setViewArticle(art);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    if (wantedEvent && EVENTS.length) {
+      if (EVENTS.some(x => x.id === wantedEvent)) setViewEvent(wantedEvent);
       window.history.replaceState({}, "", window.location.pathname);
     }
   });
