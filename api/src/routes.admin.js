@@ -19,7 +19,10 @@ import { q, pool } from './db.js';
 import { requireSuperAdmin } from './adminAuth.js';
 import * as storage from './storage.js';
 import { videoStatus, deleteVideo, streamReady } from './stream.js';
-import { sendMail, ffgEmail, emailButton, escapeHtml, APP_BASE } from './mailer.js';
+import {
+  sendMail, ffgEmail, emailButton, escapeHtml, APP_BASE,
+  APP_STORE_URL, PLAY_STORE_URL,
+} from './mailer.js';
 import { createPayment, stripeReady, stripeTestMode, payId } from './stripe.js';
 import { reindexAll, embedReady } from './embed.js';
 
@@ -800,7 +803,15 @@ adminRouter.post('/applications/:id/approve', async (req, res) => {
     `SELECT * FROM applications WHERE id = $1 AND status = 'pending'`, [req.params.id]
   );
   const app = rows[0];
-  if (!app) return res.status(404).json({ error: 'no pending application with that id' });
+  if (!app) {
+    const half = await q(
+      `SELECT status FROM applications WHERE id = $1`, [req.params.id]
+    );
+    if (half.rows[0]?.status === 'awaiting_details') {
+      return res.status(409).json({ error: 'They have not finished part two of their application yet.' });
+    }
+    return res.status(404).json({ error: 'no pending application with that id' });
+  }
 
   let member;
   try {
@@ -821,20 +832,46 @@ adminRouter.post('/applications/:id/approve', async (req, res) => {
     [app.id, member?.id || null, req.admin?.username || 'admin']
   );
 
+  /* The store links only appear once the app is actually published; until
+     then the web app is the destination and works on any phone. */
+  const stores = [
+    APP_STORE_URL && `<a href="${APP_STORE_URL}" style="color:#A8894E;">Download on the App Store</a>`,
+    PLAY_STORE_URL && `<a href="${PLAY_STORE_URL}" style="color:#A8894E;">Get it on Google Play</a>`,
+  ].filter(Boolean);
+
   sendMail({
     to: app.email,
     cc: 'lee@navada.info',
-    subject: 'Welcome to Forbes Family Group',
+    subject: 'Welcome to FFG Connect',
     html: ffgEmail(`
-      <p style="margin:0 0 14px;">Dear ${escapeHtml(app.name.split(' ')[0])},</p>
-      <p style="margin:0 0 14px;">Your application has been approved. Welcome.</p>
-      <p style="margin:0 0 14px;">Connect is our private members' space: rooms, events,
-      introductions and conversations that do not happen anywhere else.</p>
-      ${emailButton(APP_BASE, 'Enter Connect')}
-      <p style="margin:0 0 8px;color:#8A867C;font-size:13px;">Sign in with Google using this
-      email address — your membership is already waiting for you.</p>
-      <p style="margin:14px 0 0;">Forbes Family Group</p>
-    `),
+      <p style="margin:0 0 6px;text-align:center;font-size:10px;letter-spacing:3px;color:#8A867C;">MEMBERSHIP APPROVED</p>
+      <h1 style="margin:6px 0 20px;text-align:center;font-family:Georgia,serif;font-weight:normal;font-size:27px;line-height:1.2;color:#17171B;">
+        Welcome to FFG Connect
+      </h1>
+      <p style="margin:0 0 14px;">Dear ${escapeHtml(app.first_name || app.name.split(' ')[0])},</p>
+      <p style="margin:0 0 14px;">
+        Your application has been reviewed and approved. We are glad to have you.
+      </p>
+      <p style="margin:0 0 14px;">
+        Connect is the members&rsquo; floor: rooms you can walk into, events worth
+        clearing your diary for, and introductions that do not happen anywhere else.
+      </p>
+      ${emailButton(APP_BASE, 'Open FFG Connect')}
+      <p style="margin:0 0 14px;color:#8A867C;font-size:13px;text-align:center;">
+        Sign in with Google using <strong style="color:#17171B;">${escapeHtml(app.email)}</strong>.
+        Your membership is already waiting for you.
+      </p>
+      ${stores.length ? `
+        <div style="margin:22px 0 0;padding-top:18px;border-top:1px solid #E5E1D6;text-align:center;font-size:13.5px;">
+          <p style="margin:0 0 8px;color:#8A867C;">Prefer the app?</p>
+          <p style="margin:0;">${stores.join(' &nbsp;&middot;&nbsp; ')}</p>
+        </div>` : `
+        <div style="margin:22px 0 0;padding-top:18px;border-top:1px solid #E5E1D6;text-align:center;font-size:13px;color:#8A867C;">
+          Connect runs in your phone&rsquo;s browser and can be added to your home
+          screen like any app. Open the link above, then choose Share and
+          &ldquo;Add to Home Screen&rdquo;.
+        </div>`}
+    `, { footer: 'full' }),
   });
 
   res.json({ ok: true, member_id: member?.id || null });

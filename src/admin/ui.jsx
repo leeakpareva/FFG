@@ -175,13 +175,14 @@ export const Sheet = ({ title, onClose, children, wide }) => (
 export const StatusChip = ({ status }) => {
   const c = {
     paid: T.community, pending: T.gold, failed: '#B3261E', refunded: T.connect, void: T.dim,
-    approved: T.community, rejected: '#B3261E',
+    approved: T.community, rejected: '#B3261E', awaiting_details: T.connect,
   }[status] || T.dim;
+  const label = status === 'awaiting_details' ? 'part one done' : status;
   return (
     <span style={{
       fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
       color: c, background: `${c}16`, padding: '3px 9px', borderRadius: 999, fontFamily: fontBody,
-    }}>{status}</span>
+    }}>{label}</span>
   );
 };
 

@@ -10,6 +10,14 @@ import {
 } from './ui.jsx';
 import { api } from './api.js';
 
+/** Whole years old, from a date of birth. */
+const age = (dob) => {
+  const d = new Date(dob), now = new Date();
+  let years = now.getFullYear() - d.getFullYear();
+  const before = now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate());
+  return before ? years - 1 : years;
+};
+
 const ago = (iso) => {
   const mins = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
   if (mins < 60) return `${mins}m ago`;
@@ -42,7 +50,8 @@ export default function Applications() {
   };
 
   const pending = (rows || []).filter(r => r.status === 'pending');
-  const decided = (rows || []).filter(r => r.status !== 'pending');
+  const started = (rows || []).filter(r => r.status === 'awaiting_details');
+  const decided = (rows || []).filter(r => r.status === 'approved' || r.status === 'rejected');
 
   const Row = ({ r }) => (
     <Card style={{ marginBottom: 10 }}>
@@ -51,6 +60,11 @@ export default function Applications() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontFamily: fontHead, fontWeight: 700, fontSize: 15.5, color: T.cream }}>{r.name}</span>
             {r.status !== 'pending' && <StatusChip status={r.status} />}
+            {r.details_done_at && r.status === 'pending' && (
+              <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em', color: T.community, fontFamily: fontBody }}>
+                COMPLETE
+              </span>
+            )}
             {r.referred_by_name && (
               <span style={{
                 fontSize: 10.5, fontWeight: 700, letterSpacing: '0.08em', fontFamily: fontBody,
@@ -63,12 +77,71 @@ export default function Applications() {
           <div style={{ fontFamily: fontBody, fontSize: 13, color: T.dim, marginTop: 4, ...clip }}>
             {r.email}{r.phone ? ` · ${r.phone}` : ''} · {ago(r.created_at)}
           </div>
-          {r.about && (
-            <div style={{
-              fontFamily: fontBody, fontSize: 13.5, color: T.cream, marginTop: 10,
-              lineHeight: 1.55, background: T.ink, borderRadius: 12, padding: '10px 14px',
-            }}>
-              {r.about}
+
+          {(r.descriptor || r.industry || r.organisation) && (
+            <div style={{ fontFamily: fontBody, fontSize: 13.5, color: T.cream, marginTop: 8, lineHeight: 1.5 }}>
+              {[r.role_title, r.organisation].filter(Boolean).join(' at ')}
+              {r.industry ? <span style={{ color: T.dim }}> · {r.industry}</span> : null}
+              {r.descriptor ? <span style={{ color: T.dim }}> · {r.descriptor}</span> : null}
+            </div>
+          )}
+
+          {(r.date_of_birth || r.nationality || r.identifies_as) && (
+            <div style={{ fontFamily: fontBody, fontSize: 12.5, color: T.dim, marginTop: 5 }}>
+              {[
+                r.date_of_birth ? `${age(r.date_of_birth)} years` : null,
+                r.nationality,
+                r.identifies_as,
+                r.marketing_opt_in ? 'Happy to be contacted' : null,
+              ].filter(Boolean).join(' · ')}
+            </div>
+          )}
+
+          {r.referred_by && !r.referred_by_name && (
+            <div style={{ fontFamily: fontBody, fontSize: 12.5, color: T.dim, marginTop: 5 }}>
+              Says they were referred by <span style={{ color: T.cream }}>{r.referred_by}</span>
+            </div>
+          )}
+
+          {(r.linkedin_url || r.instagram_handle || r.website_url) && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+              {[
+                r.linkedin_url && ['LinkedIn', r.linkedin_url],
+                r.instagram_handle && ['Instagram', `https://instagram.com/${r.instagram_handle}`],
+                r.website_url && ['Website', r.website_url],
+              ].filter(Boolean).map(([label, href]) => (
+                <a key={label} href={href} target="_blank" rel="noreferrer" style={{
+                  fontFamily: fontBody, fontSize: 12.5, fontWeight: 700, color: T.goldSoft,
+                }}>{label} ↗</a>
+              ))}
+            </div>
+          )}
+
+          {[
+            ['Why they want to join', r.about],
+            ['Their story', r.story],
+            ['What they would bring, and hope to gain', r.contribution],
+            ['What would make it worth it', r.worth_it],
+          ].filter(([, v]) => v).map(([label, value]) => (
+            <div key={label} style={{ marginTop: 10 }}>
+              <div style={{ fontFamily: fontBody, fontSize: 11.5, fontWeight: 700, letterSpacing: '0.08em', color: T.dim, marginBottom: 4 }}>
+                {label.toUpperCase()}
+              </div>
+              <div style={{
+                fontFamily: fontBody, fontSize: 13.5, color: T.cream, lineHeight: 1.55,
+                background: T.ink, borderRadius: 12, padding: '10px 14px', whiteSpace: 'pre-wrap',
+              }}>
+                {value}
+              </div>
+            </div>
+          ))}
+
+          {(r.income_bracket || r.heard_about) && (
+            <div style={{ fontFamily: fontBody, fontSize: 12.5, color: T.dim, marginTop: 8 }}>
+              {[
+                r.income_bracket ? `Income: ${r.income_bracket}` : null,
+                r.heard_about ? `Heard about us: ${r.heard_about}` : null,
+              ].filter(Boolean).join(' · ')}
             </div>
           )}
           {r.status !== 'pending' && (
@@ -103,9 +176,25 @@ export default function Applications() {
       )}
       {rows === null && <EmptyState title="Loading…" />}
       {rows !== null && !pending.length && (
-        <EmptyState title="No applications waiting" hint="New applications from the website appear here and by email." />
+        <EmptyState title="No applications waiting" hint="Completed applications from the website appear here and by email." />
       )}
       {pending.map(r => <Row key={r.id} r={r} />)}
+
+      {started.length > 0 && (
+        <>
+          <div style={{
+            fontFamily: fontBody, fontWeight: 700, fontSize: 12, letterSpacing: '0.14em',
+            color: T.dim, margin: '26px 0 6px',
+          }}>
+            STARTED, NOT FINISHED
+          </div>
+          <div style={{ fontFamily: fontBody, fontSize: 12.5, color: T.dim, marginBottom: 12, lineHeight: 1.5 }}>
+            They have completed part one and been emailed a link to finish. There is
+            nothing to decide until they do.
+          </div>
+          {started.map(r => <Row key={r.id} r={r} />)}
+        </>
+      )}
 
       {decided.length > 0 && (
         <>
