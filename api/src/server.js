@@ -10,6 +10,7 @@ import { contentRouter } from './routes.content.js';
 import { socialRouter } from './routes.social.js';
 import { adminLoginRouter } from './adminAuth.js';
 import { adminRouter } from './routes.admin.js';
+import { publicRouter } from './routes.public.js';
 import { stripeWebhookRouter } from './stripe.js';
 import { setupWs } from './ws.js';
 import { catchAsync } from './catchAsync.js';
@@ -81,6 +82,9 @@ app.get('/api/health', async (_req, res) => {
     res.status(503).json({ ok: false, db: 'down', error: e.message });
   }
 });
+
+// The public website's endpoints: the apply form and the CMS content.
+app.use('/api', catchAsync(publicRouter));
 
 // Who am I, and my own profile: GET to read, PATCH to edit.
 app.use('/api/me', catchAsync(profileRouter));

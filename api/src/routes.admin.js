@@ -19,6 +19,7 @@ import { q, pool } from './db.js';
 import { requireSuperAdmin } from './adminAuth.js';
 import * as storage from './storage.js';
 import { videoStatus, deleteVideo, streamReady } from './stream.js';
+import { sendMail, ffgEmail, emailButton, escapeHtml, APP_BASE } from './mailer.js';
 import { createPayment, stripeReady, stripeTestMode, payId } from './stripe.js';
 import { reindexAll, embedReady } from './embed.js';
 
@@ -201,15 +202,11 @@ adminRouter.patch('/members/:id', async (req, res) => {
 });
 
 /**
- * Invite: pre-create the row. resolveMember() in auth.js claims it by email
- * the first time that person signs in with Google — no invite email is sent
- * from here, Lee tells them himself.
+ * Pre-create a member row and open the Clerk allowlist door for their email.
+ * resolveMember() in auth.js claims the row by email on first sign-in.
+ * Throws {status, error} on conflict.
  */
-adminRouter.post('/members', async (req, res) => {
-  const { name, email, role = 'Member', pillar = 'Community' } = req.body || {};
-  if (!name || !email) return res.status(400).json({ error: 'name and email are required' });
-  if (!PILLARS.includes(pillar)) return res.status(400).json({ error: 'bad pillar' });
-
+async function inviteMember({ name, email, role = 'Member', pillar = 'Community' }) {
   const initials = name.trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'ME';
   const handle = name.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '').slice(0, 24) || 'member';
 
@@ -230,15 +227,28 @@ adminRouter.post('/members', async (req, res) => {
           });
         } catch (e) { console.error('[admin] clerk allowlist add failed:', e.message); }
       }
-      return res.status(201).json(rows[0]);
+      return rows[0];
     } catch (e) {
       if (e.code !== '23505') throw e;
       if (/email/.test(e.constraint || '')) {
-        return res.status(409).json({ error: 'a member with that email already exists' });
+        throw { status: 409, error: 'a member with that email already exists' };
       }
     }
   }
-  res.status(500).json({ error: 'could not find a free id' });
+  throw { status: 500, error: 'could not find a free id' };
+}
+
+/** Invite: pre-create the row; no invite email is sent, Lee tells them himself. */
+adminRouter.post('/members', async (req, res) => {
+  const { name, email, role = 'Member', pillar = 'Community' } = req.body || {};
+  if (!name || !email) return res.status(400).json({ error: 'name and email are required' });
+  if (!PILLARS.includes(pillar)) return res.status(400).json({ error: 'bad pillar' });
+  try {
+    res.status(201).json(await inviteMember({ name, email, role, pillar }));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.error });
+    throw e;
+  }
 });
 
 /**
@@ -761,6 +771,127 @@ adminRouter.patch('/rooms/:id', async (req, res) => {
 adminRouter.delete('/rooms/:id', async (req, res) => {
   const { rowCount } = await q('DELETE FROM rooms WHERE id = $1', [req.params.id]);
   if (!rowCount) return res.status(404).json({ error: 'not found' });
+  res.status(204).end();
+});
+
+/* =========================================================== applications */
+
+/**
+ * The membership front door. Applications arrive from the public website;
+ * everything here is the two-step decision the business asked for:
+ * approve (member + allowlist + welcome email, all in one tap) or reject
+ * (a gentle email, nothing created).
+ */
+
+adminRouter.get('/applications', async (req, res) => {
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null;
+  const { rows } = await q(`
+    SELECT a.*, m.name AS referred_by_name
+      FROM applications a
+      LEFT JOIN members m ON m.id = a.referral
+     ${status ? 'WHERE a.status = $1' : ''}
+     ORDER BY (a.status = 'pending') DESC, a.created_at DESC
+     LIMIT 500`, status ? [status] : []);
+  res.json({ applications: rows });
+});
+
+adminRouter.post('/applications/:id/approve', async (req, res) => {
+  const { rows } = await q(
+    `SELECT * FROM applications WHERE id = $1 AND status = 'pending'`, [req.params.id]
+  );
+  const app = rows[0];
+  if (!app) return res.status(404).json({ error: 'no pending application with that id' });
+
+  let member;
+  try {
+    member = await inviteMember({ name: app.name, email: app.email });
+  } catch (e) {
+    if (e.status !== 409) {
+      if (e.status) return res.status(e.status).json({ error: e.error });
+      throw e;
+    }
+    // Already a member — the decision still stands, just attach the row.
+    const existing = await q('SELECT id FROM members WHERE lower(email) = lower($1)', [app.email]);
+    member = existing.rows[0] || null;
+  }
+
+  await q(
+    `UPDATE applications SET status = 'approved', member_id = $2, decided_by = $3, decided_at = now()
+      WHERE id = $1`,
+    [app.id, member?.id || null, req.admin?.username || 'admin']
+  );
+
+  sendMail({
+    to: app.email,
+    cc: 'lee@navada.info',
+    subject: 'Welcome to Forbes Family Group',
+    html: ffgEmail(`
+      <p style="margin:0 0 14px;">Dear ${escapeHtml(app.name.split(' ')[0])},</p>
+      <p style="margin:0 0 14px;">Your application has been approved. Welcome.</p>
+      <p style="margin:0 0 14px;">Connect is our private members' space: rooms, events,
+      introductions and conversations that do not happen anywhere else.</p>
+      ${emailButton(APP_BASE, 'Enter Connect')}
+      <p style="margin:0 0 8px;color:#8A867C;font-size:13px;">Sign in with Google using this
+      email address — your membership is already waiting for you.</p>
+      <p style="margin:14px 0 0;">Forbes Family Group</p>
+    `),
+  });
+
+  res.json({ ok: true, member_id: member?.id || null });
+});
+
+adminRouter.post('/applications/:id/reject', async (req, res) => {
+  const { rows } = await q(
+    `UPDATE applications SET status = 'rejected', decided_by = $2, decided_at = now()
+      WHERE id = $1 AND status = 'pending' RETURNING name, email`,
+    [req.params.id, req.admin?.username || 'admin']
+  );
+  const app = rows[0];
+  if (!app) return res.status(404).json({ error: 'no pending application with that id' });
+
+  sendMail({
+    to: app.email,
+    cc: 'lee@navada.info',
+    subject: 'Your Forbes Family Group application',
+    html: ffgEmail(`
+      <p style="margin:0 0 14px;">Dear ${escapeHtml(app.name.split(' ')[0])},</p>
+      <p style="margin:0 0 14px;">Thank you for your interest in Forbes Family Group and for
+      taking the time to apply.</p>
+      <p style="margin:0 0 14px;">Membership of Connect is limited, and we are unable to offer
+      you a place at this time. Applications reopen regularly, and we would be glad to see
+      yours again.</p>
+      <p style="margin:14px 0 0;">Forbes Family Group</p>
+    `),
+  });
+
+  res.json({ ok: true });
+});
+
+/* =========================================================== site content */
+
+/** The website's CMS: every editable slot on forbesfamilygroup's front door. */
+
+adminRouter.get('/site-content', async (_req, res) => {
+  const { rows } = await q('SELECT key, value, updated_at FROM site_content ORDER BY key');
+  const content = {};
+  for (const row of rows) content[row.key] = row.value;
+  res.json({ content });
+});
+
+adminRouter.put('/site-content/:key', async (req, res) => {
+  const key = String(req.params.key).slice(0, 60);
+  const { value } = req.body || {};
+  if (value === undefined) return res.status(400).json({ error: 'value is required' });
+  await q(
+    `INSERT INTO site_content (key, value, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()`,
+    [key, JSON.stringify(value)]
+  );
+  res.json({ ok: true });
+});
+
+adminRouter.delete('/site-content/:key', async (req, res) => {
+  await q('DELETE FROM site_content WHERE key = $1', [String(req.params.key).slice(0, 60)]);
   res.status(204).end();
 });
 

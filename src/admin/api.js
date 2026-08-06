@@ -3,7 +3,7 @@
  * sessionStorage — closing the tab ends the session, which is the right
  * default for a back office.
  */
-const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+export const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 
 const KEY = 'ffg.admin.token';
 
@@ -60,6 +60,14 @@ export const api = {
   updateMember: (id, patch) => call(`/api/admin/members/${id}`, { method: 'PATCH', body: patch }),
   inviteMember: (body) => call('/api/admin/members', { method: 'POST', body }),
   deleteMember: (id) => call(`/api/admin/members/${id}`, { method: 'DELETE' }),
+
+  applications: (status) => call(`/api/admin/applications${status ? `?status=${status}` : ''}`),
+  approveApplication: (id) => call(`/api/admin/applications/${id}/approve`, { method: 'POST' }),
+  rejectApplication: (id) => call(`/api/admin/applications/${id}/reject`, { method: 'POST' }),
+
+  siteContent: () => call('/api/admin/site-content'),
+  saveSiteContent: (key, value) => call(`/api/admin/site-content/${key}`, { method: 'PUT', body: { value } }),
+  resetSiteContent: (key) => call(`/api/admin/site-content/${key}`, { method: 'DELETE' }),
 
   uploadMedia(file) {
     const form = new FormData();

@@ -173,7 +173,10 @@ export const Sheet = ({ title, onClose, children, wide }) => (
 );
 
 export const StatusChip = ({ status }) => {
-  const c = { paid: T.community, pending: T.gold, failed: '#B3261E', refunded: T.connect, void: T.dim }[status] || T.dim;
+  const c = {
+    paid: T.community, pending: T.gold, failed: '#B3261E', refunded: T.connect, void: T.dim,
+    approved: T.community, rejected: '#B3261E',
+  }[status] || T.dim;
   return (
     <span style={{
       fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',

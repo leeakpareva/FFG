@@ -30,6 +30,9 @@ const LOGO_DARK_MARK = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAWgAAAFoCA
  * Light is the only theme. The dark palette and its light-on-dark logo were
  * removed at the client's request — see git history if it is ever revived.
  */
+/* The public FFG website — where prospective members apply. */
+const SITE_URL = "https://forbes-family-group.vercel.app";
+
 const LIGHT = {
   mode: "light",
   ink: "#F7F4EE",
@@ -745,6 +748,10 @@ const UserProfile = ({ user, onBack, member, openMessages, openNotifs, openChat,
           fn: () => writeFlag("ffg.briefing.dismissed", "") },
         { icon: Bookmark, label: "Saved posts", fn: () => setShowSaved(true) },
         { icon: QrCode, label: "My QR code", fn: () => setShowQr(true) },
+        /* Referral: applications from this link arrive in the admin queue
+           tagged with this member's name. */
+        { icon: Share2, label: "Invite someone to FFG", done: "Your invite link is copied — share it anywhere",
+          fn: () => navigator.clipboard?.writeText(`${SITE_URL}/?ref=${user.id}`) },
         { icon: Globe, label: "Copy profile link", fn: copyLink, done: "Link copied" },
         { icon: LogOut, label: "Log out", danger: true,
           fn: () => { writeFlag("ffg.entered", ""); signOut(); } },

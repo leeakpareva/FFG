@@ -11,11 +11,15 @@ import Dashboard from './Dashboard.jsx';
 import Members from './Members.jsx';
 import Content from './Content.jsx';
 import Payments from './Payments.jsx';
+import Applications from './Applications.jsx';
+import Website from './Website.jsx';
 
 const SCREENS = [
   { id: 'dashboard', label: 'Dashboard', C: Dashboard },
+  { id: 'applications', label: 'Applications', C: Applications },
   { id: 'members', label: 'Members', C: Members },
   { id: 'content', label: 'Content', C: Content },
+  { id: 'website', label: 'Website', C: Website },
   { id: 'payments', label: 'Payments', C: Payments },
 ];
 

@@ -65,7 +65,7 @@ adminLoginRouter.post('/', async (req, res) => {
   }
 
   fails.delete(ip);
-  const token = jwt.sign({ role: 'superadmin' }, SECRET, { expiresIn: TOKEN_TTL });
+  const token = jwt.sign({ role: 'superadmin', sub: username }, SECRET, { expiresIn: TOKEN_TTL });
   res.json({ token, expiresIn: TOKEN_TTL });
 });
 
@@ -77,6 +77,7 @@ export function requireSuperAdmin(req, res, next) {
   try {
     const claims = jwt.verify(token, SECRET);
     if (claims.role !== 'superadmin') throw new Error('wrong role');
+    req.admin = { username: claims.sub || 'admin' };
   } catch {
     return res.status(401).json({ error: 'invalid token' });
   }
